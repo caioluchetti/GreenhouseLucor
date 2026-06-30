@@ -1,0 +1,37 @@
+services:
+  backend:
+    build: ./api
+    image: greenhouse-lucor-backend:latest
+    container_name: greenhouse-backend
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT:-6001}:6001"
+    volumes:
+      - greenhouse-data:/app/data
+    environment:
+      - MQTT_MODE=${MQTT_MODE:-mock}
+      - MQTT_BROKER=${MQTT_BROKER:-localhost}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6001/api/time').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "io.portainer.description=Tatufa — Backend API REST + MQTT + Agendamento de Irrigação"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - greenhouse
+
+volumes:
+  greenhouse-data:
+    name: greenhouse-data
+
+networks:
+  greenhouse:
+    name: greenhouse
+    driver: bridge

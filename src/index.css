@@ -1,0 +1,468 @@
+@import "tailwindcss";
+
+/* ── Solorpunk color definitions ── */
+:root {
+  --sp-bg: #0f1710;
+  --sp-surface: rgba(16, 28, 18, 0.65);
+  --sp-border: rgba(74, 222, 128, 0.15);
+  --sp-glow-green: rgba(74, 222, 128, 0.35);
+  --sp-glow-amber: rgba(251, 191, 36, 0.35);
+
+  --sp-text: #e5e7db;
+  --sp-text-dim: #8b8f85;
+  --sp-text-muted: #5c6256;
+  --sp-accent: #4ade80;
+  --sp-accent-dim: rgba(74, 222, 128, 0.8);
+  --sp-accent-muted: rgba(74, 222, 128, 0.5);
+  --sp-danger: #f87171;
+  --sp-danger-dim: rgba(248, 113, 113, 0.7);
+  --sp-warning: #fbbf24;
+  --sp-warning-bg: rgba(251, 191, 36, 0.3);
+  --sp-surface-raised: rgba(255, 255, 255, 0.03);
+  --sp-surface-raised-hover: rgba(255, 255, 255, 0.04);
+  --sp-surface-raised-hover-strong: rgba(255, 255, 255, 0.05);
+  --sp-border-subtle: rgba(255, 255, 255, 0.04);
+  --sp-border-subtle-strong: rgba(255, 255, 255, 0.06);
+  --sp-accent-border: rgba(74, 222, 128, 0.2);
+  --sp-accent-border-light: rgba(74, 222, 128, 0.15);
+  --sp-accent-bg: rgba(74, 222, 128, 0.15);
+  --sp-accent-bg-light: rgba(74, 222, 128, 0.1);
+  --sp-tab-panel-bg: rgba(12, 22, 14, 0.3);
+  --sp-loading-bg: rgba(74, 222, 128, 0.3);
+  --sp-loading-accent: #4ade80;
+  --sp-body-bg: #0f1710;
+  --sp-input-bg: rgba(255, 255, 255, 0.04);
+  --sp-input-border: rgba(255, 255, 255, 0.08);
+  --sp-input-text: #e5e7db;
+  --sp-glass-modal-bg: rgba(12, 22, 14, 0.85);
+  --sp-glass-modal-border: rgba(74, 222, 128, 0.2);
+  --sp-zone-active-border: rgba(74, 222, 128, 0.25);
+  --sp-zone-inactive-text: #8b8f85;
+  --sp-zone-inactive-bg: rgba(255, 255, 255, 0.04);
+  --sp-zone-inactive-border: rgba(255, 255, 255, 0.05);
+  --sp-btn-secondary-bg: rgba(255, 255, 255, 0.05);
+  --sp-btn-secondary-text: #c0c7bb;
+  --sp-btn-secondary-border: rgba(255, 255, 255, 0.06);
+  --sp-overlay-bg: rgba(4, 8, 5, 0.7);
+  --sp-scrollbar-thumb: rgba(74, 222, 128, 0.2);
+  --sp-scrollbar-thumb-hover: rgba(74, 222, 128, 0.35);
+  --sp-gradient-soil: linear-gradient(to bottom, rgba(74, 222, 128, 0.2), rgba(74, 222, 128, 0.05));
+  --sp-gradient-temp: linear-gradient(to bottom, rgba(251, 146, 60, 0.2), rgba(245, 158, 11, 0.05));
+  --sp-gradient-humid: linear-gradient(to bottom, rgba(96, 165, 250, 0.2), rgba(6, 182, 212, 0.05));
+}
+
+[data-theme="light"] {
+  --sp-bg: #f5f0e8;
+  --sp-surface: rgba(255, 255, 255, 0.75);
+  --sp-border: rgba(22, 163, 74, 0.15);
+  --sp-glow-green: rgba(22, 163, 74, 0.3);
+  --sp-glow-amber: rgba(217, 119, 6, 0.25);
+
+  --sp-text: #2d3a24;
+  --sp-text-dim: #5a6b4a;
+  --sp-text-muted: #8a9a7a;
+  --sp-accent: #16a34a;
+  --sp-accent-dim: rgba(22, 163, 74, 0.9);
+  --sp-accent-muted: rgba(22, 163, 74, 0.55);
+  --sp-danger: #dc2626;
+  --sp-danger-dim: rgba(220, 38, 38, 0.75);
+  --sp-warning: #d97706;
+  --sp-warning-bg: rgba(217, 119, 6, 0.2);
+  --sp-surface-raised: rgba(0, 0, 0, 0.03);
+  --sp-surface-raised-hover: rgba(0, 0, 0, 0.05);
+  --sp-surface-raised-hover-strong: rgba(0, 0, 0, 0.08);
+  --sp-border-subtle: rgba(0, 0, 0, 0.06);
+  --sp-border-subtle-strong: rgba(0, 0, 0, 0.1);
+  --sp-accent-border: rgba(22, 163, 74, 0.25);
+  --sp-accent-border-light: rgba(22, 163, 74, 0.2);
+  --sp-accent-bg: rgba(22, 163, 74, 0.12);
+  --sp-accent-bg-light: rgba(22, 163, 74, 0.08);
+  --sp-tab-panel-bg: rgba(245, 240, 232, 0.6);
+  --sp-loading-bg: rgba(22, 163, 74, 0.25);
+  --sp-loading-accent: #16a34a;
+  --sp-body-bg: #f5f0e8;
+  --sp-input-bg: rgba(0, 0, 0, 0.04);
+  --sp-input-border: rgba(0, 0, 0, 0.1);
+  --sp-input-text: #2d3a24;
+  --sp-glass-modal-bg: rgba(255, 255, 255, 0.9);
+  --sp-glass-modal-border: rgba(22, 163, 74, 0.2);
+  --sp-zone-active-border: rgba(22, 163, 74, 0.3);
+  --sp-zone-inactive-text: #6b7a5e;
+  --sp-zone-inactive-bg: rgba(0, 0, 0, 0.03);
+  --sp-zone-inactive-border: rgba(0, 0, 0, 0.06);
+  --sp-btn-secondary-bg: rgba(0, 0, 0, 0.04);
+  --sp-btn-secondary-text: #4a5e3a;
+  --sp-btn-secondary-border: rgba(0, 0, 0, 0.08);
+  --sp-overlay-bg: rgba(0, 0, 0, 0.35);
+  --sp-scrollbar-thumb: rgba(22, 163, 74, 0.2);
+  --sp-scrollbar-thumb-hover: rgba(22, 163, 74, 0.4);
+  --sp-gradient-soil: linear-gradient(to bottom, rgba(22, 163, 74, 0.15), rgba(22, 163, 74, 0.03));
+  --sp-gradient-temp: linear-gradient(to bottom, rgba(251, 146, 60, 0.15), rgba(245, 158, 11, 0.03));
+  --sp-gradient-humid: linear-gradient(to bottom, rgba(96, 165, 250, 0.15), rgba(6, 182, 212, 0.03));
+}
+
+/* ── Background layer ── */
+.sp-bg {
+  background:
+    radial-gradient(ellipse 80% 50% at 20% 10%, rgba(251, 191, 36, 0.06) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 90%, rgba(74, 222, 128, 0.07) 0%, transparent 60%),
+    var(--sp-body-bg);
+  background-color: var(--sp-body-bg);
+}
+
+[data-theme="light"] .sp-bg {
+  background:
+    radial-gradient(ellipse 80% 50% at 20% 10%, rgba(217, 119, 6, 0.04) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 90%, rgba(22, 163, 74, 0.05) 0%, transparent 60%),
+    var(--sp-body-bg);
+  background-color: var(--sp-body-bg);
+}
+
+/* hex grid overlay */
+.sp-bg::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.04;
+  background-image:
+    url("data:image/svg+xml,%3Csvg width='60' height='52' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M30 0L60 15v22.5L30 52 0 37.5V15z' fill='none' stroke='%234ade80' stroke-width='0.8'/%3E%3C/svg%3E");
+  background-size: 60px 52px;
+}
+
+/* ── Glassmorphism card ── */
+.sp-glass {
+  background: var(--sp-surface);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--sp-border);
+  border-radius: 1.25rem;
+}
+
+.sp-glass-sm {
+  background: var(--sp-surface);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--sp-border);
+  border-radius: 0.875rem;
+}
+
+/* ── Glass modal ── */
+.sp-glass-modal {
+  background: var(--sp-glass-modal-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--sp-glass-modal-border);
+  border-radius: 1.5rem;
+}
+
+/* ── Glow rings for active zones ── */
+@keyframes sp-pulse-green {
+  0%, 100% {
+    box-shadow:
+      0 0 12px rgba(74, 222, 128, 0.25),
+      0 0 28px rgba(74, 222, 128, 0.10),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+  50% {
+    box-shadow:
+      0 0 20px rgba(74, 222, 128, 0.45),
+      0 0 44px rgba(74, 222, 128, 0.18),
+      inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+}
+
+@keyframes sp-pulse-amber {
+  0%, 100% {
+    box-shadow:
+      0 0 12px rgba(251, 191, 36, 0.20),
+      0 0 24px rgba(251, 191, 36, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+  50% {
+    box-shadow:
+      0 0 20px rgba(251, 191, 36, 0.40),
+      0 0 40px rgba(251, 191, 36, 0.15),
+      inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+}
+
+.sp-glow-green {
+  animation: sp-pulse-green 3s ease-in-out infinite;
+}
+
+.sp-glow-amber {
+  animation: sp-pulse-amber 3s ease-in-out infinite;
+}
+
+/* ── Drip animation ── */
+@keyframes sp-drip {
+  0% { transform: translateY(0) scale(1); opacity: 1; }
+  60% { opacity: 0.7; }
+  100% { transform: translateY(14px) scale(0.6); opacity: 0; }
+}
+
+.sp-drip {
+  animation: sp-drip 1.2s ease-in infinite;
+}
+
+/* ── Fade in ── */
+@keyframes sp-fade-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.sp-fade-in {
+  animation: sp-fade-in 0.4s ease-out;
+}
+
+/* ── Status dot pulse ── */
+@keyframes sp-dot-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.3); }
+}
+
+.sp-dot-ring {
+  animation: sp-dot-pulse 2s ease-in-out infinite;
+}
+
+/* ── Gradient text ── */
+.sp-text-gradient {
+  background: linear-gradient(135deg, #4ade80 0%, #fbbf24 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Toggle switch ── */
+.sp-toggle {
+  appearance: none;
+  width: 44px;
+  height: 24px;
+  border-radius: 12px;
+  background: var(--sp-surface-raised);
+  border: 1px solid var(--sp-border-subtle);
+  position: relative;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.sp-toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--sp-text-dim);
+  transition: all 0.3s ease;
+}
+
+.sp-toggle:checked {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  border-color: var(--sp-accent-border);
+  box-shadow: 0 0 12px rgba(74, 222, 128, 0.3);
+}
+
+.sp-toggle:checked::after {
+  left: 22px;
+  background: #fff;
+}
+
+/* ── Moisture bar ── */
+.sp-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--sp-surface-raised);
+  overflow: hidden;
+}
+
+.sp-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.8s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.sp-irrigation-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--sp-surface-raised);
+  overflow: hidden;
+}
+
+.sp-irrigation-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #22c55e, #4ade80);
+  box-shadow: 0 0 8px rgba(74, 222, 128, 0.4);
+  transition: width 1s linear;
+}
+
+/* ── Input fields ── */
+.sp-input {
+  background: var(--sp-input-bg);
+  border: 1px solid var(--sp-input-border);
+  border-radius: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  color: var(--sp-input-text);
+  font-size: 0.875rem;
+  transition: border-color 0.2s;
+}
+
+.sp-input:focus {
+  outline: none;
+  border-color: rgba(74, 222, 128, 0.5);
+  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.1);
+}
+
+/* ── Buttons ── */
+.sp-btn-primary {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  color: #fff;
+  font-weight: 600;
+  border-radius: 0.75rem;
+  padding: 0.625rem 1.25rem;
+  font-size: 0.875rem;
+  transition: all 0.2s;
+  border: none;
+  cursor: pointer;
+}
+
+.sp-btn-primary:hover {
+  box-shadow: 0 0 20px rgba(74, 222, 128, 0.5);
+  transform: translateY(-1px);
+}
+
+.sp-btn-primary:disabled {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.25);
+  box-shadow: none;
+  transform: none;
+}
+
+.sp-btn-secondary {
+  background: var(--sp-btn-secondary-bg);
+  color: var(--sp-btn-secondary-text);
+  font-weight: 500;
+  border-radius: 0.75rem;
+  padding: 0.625rem 1.25rem;
+  font-size: 0.875rem;
+  transition: all 0.2s;
+  border: 1px solid var(--sp-btn-secondary-border);
+  cursor: pointer;
+}
+
+.sp-btn-secondary:hover {
+  background: var(--sp-surface-raised-hover);
+  border-color: var(--sp-border-subtle-strong);
+}
+
+.sp-btn-secondary:active {
+  transform: scale(0.97);
+}
+
+/* ── Zone toggle button (large) ── */
+.sp-zone-btn-on {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  color: #fff;
+  font-weight: 700;
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+  width: 100%;
+  font-size: 0.875rem;
+  letter-spacing: 0.05em;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 4px 20px rgba(34, 197, 94, 0.3);
+}
+
+.sp-zone-btn-on:hover {
+  box-shadow: 0 6px 28px rgba(34, 197, 94, 0.5);
+  transform: translateY(-1px);
+}
+
+.sp-zone-btn-off {
+  background: var(--sp-zone-inactive-bg);
+  color: var(--sp-zone-inactive-text);
+  font-weight: 600;
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+  width: 100%;
+  font-size: 0.875rem;
+  letter-spacing: 0.05em;
+  border: 1px solid var(--sp-zone-inactive-border);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.sp-zone-btn-off:hover {
+  background: var(--sp-surface-raised-hover);
+  color: var(--sp-text-dim);
+}
+
+.sp-zone-btn-off:active {
+  transform: scale(0.97);
+}
+
+/* ── Tab buttons ── */
+.sp-tab-active {
+  background: var(--sp-surface);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--sp-accent-border);
+  border-bottom-color: transparent;
+  border-radius: 0.75rem 0.75rem 0 0;
+  color: var(--sp-accent);
+}
+
+.sp-tab-inactive {
+  color: var(--sp-text-muted);
+  background: transparent;
+  border-radius: 0.75rem 0.75rem 0 0;
+  transition: color 0.2s;
+}
+
+.sp-tab-inactive:hover {
+  color: var(--sp-text-dim);
+}
+
+/* ── Scrollbar utilities ── */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── Overlay backdrop ── */
+.sp-overlay {
+  background: var(--sp-overlay-bg);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+::selection {
+  background: var(--sp-accent-bg-light);
+  color: var(--sp-accent);
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--sp-scrollbar-thumb);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--sp-scrollbar-thumb-hover);
+}
