@@ -125,9 +125,6 @@ bool uploadFrame() {
 
   Serial.printf("[Upload] Capture %dB, heap=%d, connecting...\n", fb->len, ESP.getFreeHeap());
 
-  client.setSSL(false);
-  client.setServername(BACKEND_HOST);
-
   if (!client.connect(BACKEND_HOST, BACKEND_PORT)) {
     IPAddress resolved;
     if (WiFi.hostByName(BACKEND_HOST, resolved)) {
