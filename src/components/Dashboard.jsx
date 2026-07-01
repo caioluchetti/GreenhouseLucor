@@ -54,9 +54,16 @@ function formatNextIrrigation(date) {
 export default function Dashboard({ zones, sensors, irrigation, zoneNames, schedules, cameraUrl, onToggle, onRename }) {
   return (
     <div className="animate-fade-in space-y-4 sm:space-y-6">
-      <CameraFeed cameraUrl={cameraUrl} />
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-3 sm:gap-4 lg:items-stretch">
+        <div className="lg:col-span-3 order-2 lg:order-1">
+          <CameraFeed cameraUrl={cameraUrl} />
+        </div>
+        <div className="lg:col-span-2 order-1 lg:order-2">
+          <SensorPanel sensors={sensors} />
+        </div>
+      </div>
 
-      <div className="grid grid-cols-3 gap-2 sm:gap-4">
+      <div className="grid grid-cols-3 gap-2 sm:gap-4 order-3">
         {[1, 2, 3].map(id => (
           <ZoneCard
             key={id}
@@ -73,8 +80,6 @@ export default function Dashboard({ zones, sensors, irrigation, zoneNames, sched
           />
         ))}
       </div>
-
-      <SensorPanel sensors={sensors} />
     </div>
   )
 }

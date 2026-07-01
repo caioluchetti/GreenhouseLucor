@@ -5,7 +5,7 @@ export default function SensorPanel({ sensors }) {
   if (!hasInside && !hasOutside) return null
 
   return (
-    <div>
+    <div className="h-full flex flex-col">
       <h3 className="text-xs font-semibold text-(--sp-text-dim) mb-3 tracking-widest uppercase flex items-center gap-2">
         <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none">
           <rect x="1" y="1" width="14" height="14" rx="3" stroke="currentColor" strokeWidth="1.5" />
@@ -14,7 +14,7 @@ export default function SensorPanel({ sensors }) {
         Sensores
       </h3>
 
-      <div className="grid grid-cols-2 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-1 gap-3 sm:gap-4 flex-1">
         <ClimateBox
           label="Dentro"
           icon="🏠"
@@ -39,7 +39,7 @@ function ClimateBox({ label, icon, temperature, humidity, gradient }) {
   const hasHum = humidity !== '--' && humidity !== undefined
 
   return (
-    <div className="sp-glass-sm p-3 sm:p-4" style={{ backgroundImage: gradient }}>
+    <div className="sp-glass-sm p-3 sm:p-4 h-full flex flex-col" style={{ backgroundImage: gradient }}>
       <div className="flex items-center gap-1.5 mb-3">
         <span className="text-sm">{icon}</span>
         <span className="text-[11px] sm:text-xs font-semibold text-(--sp-text) uppercase tracking-wide">{label}</span>
