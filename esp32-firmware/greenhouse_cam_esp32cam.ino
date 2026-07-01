@@ -24,6 +24,7 @@
 #include <WebServer.h>
 #include <esp_camera.h>
 #include <WiFiClientSecure.h>
+#include <time.h>
 
 // ── Configuração ──────────────────────────────────────────
 const char* WIFI_SSID     = "SEU_WIFI";
@@ -123,6 +124,12 @@ bool uploadFrame() {
   if (!fb) return false;
 
   if (!client.connect(BACKEND_HOST, BACKEND_PORT)) {
+    IPAddress resolved;
+    if (WiFi.hostByName(BACKEND_HOST, resolved)) {
+      Serial.printf("[DNS] %s → %s\n", BACKEND_HOST, resolved.toString().c_str());
+    } else {
+      Serial.printf("[DNS] %s FAILED\n", BACKEND_HOST);
+    }
     Serial.println("[Upload] Connection failed");
     esp_camera_fb_return(fb);
     return false;
@@ -154,6 +161,20 @@ void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println(" OK");
     Serial.print("IP: "); Serial.println(WiFi.localIP());
+
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+    Serial.print("NTP");
+    time_t now = time(nullptr);
+    int ntpAttempts = 0;
+    while (now < 1000000000 && ntpAttempts < 20) {
+      delay(500); Serial.print(".");
+      now = time(nullptr); ntpAttempts++;
+    }
+    if (now > 1000000000) {
+      Serial.println(" OK");
+    } else {
+      Serial.println(" FAILED");
+    }
   } else {
     Serial.println(" FAILED");
   }
