@@ -140,6 +140,14 @@ export default function ZoneCard({ id, label, icon, state, irrigationRemaining, 
             {formatTime(localSeconds)}
           </div>
         </div>
+      ) : isOn ? (
+        <button
+          onClick={handleToggle}
+          disabled={animating}
+          className="mt-1.5 w-full py-1 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-semibold text-red-400 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-all uppercase tracking-wide"
+        >
+          Desligar
+        </button>
       ) : (
         <button
           onClick={handleToggle}
