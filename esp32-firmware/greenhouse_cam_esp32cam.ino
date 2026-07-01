@@ -147,8 +147,8 @@ bool uploadFrame() {
   unsigned long timeout = millis() + 5000;
   while (millis() < timeout && !client.available()) delay(10);
   if (client.available()) {
-    int statusCode = client.parseInt();
-    Serial.printf("[Upload] HTTP %d\n", statusCode);
+    String line = client.readStringUntil('\r');
+    Serial.printf("[Upload] %s\n", line.c_str());
     while (client.available()) client.read();
   } else {
     Serial.println("[Upload] No response (timeout)");
