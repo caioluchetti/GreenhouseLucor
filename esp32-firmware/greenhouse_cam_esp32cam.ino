@@ -20,6 +20,8 @@
  *   - (WiFi.h — built-in)
  *   - (WebServer.h — built-in)
  */
+#define MQTT_MAX_PACKET_SIZE 65536
+
 #include <WiFi.h>
 #include <WebServer.h>
 #include <esp_camera.h>
@@ -38,6 +40,10 @@ const char* MQTT_TLS_FINGERPRINT = "36:12:05:B8:85:08:C1:9B:A0:F0:FA:6B:CC:C2:F2
 
 const char* BACKEND_HOST  = "192.168.1.100";   // IP do servidor backend
 const int   BACKEND_PORT  = 6001;
+
+// ── Stream settings ───────────────────────────────────────
+#define STREAM_QUALITY 25       // JPEG quality 0-63 (25 = compact for MQTT)
+#define FRAME_INTERVAL  300     // ms between MQTT frame publishes
 
 // ── Camera pinout (AI Thinker ESP32-CAM) ─────────────────
 #define CAM_PIN_PWDN    -1
@@ -62,6 +68,7 @@ WebServer server(80);
 WiFiClientSecure espClient;
 PubSubClient mqtt(espClient);
 unsigned long lastPublish = 0;
+unsigned long lastFrameMs = 0;
 bool cameraOk = false;
 String streamUrl = "";
 String captureUrl = "";
@@ -85,8 +92,8 @@ bool initCamera() {
   config.pin_reset    = CAM_PIN_RESET;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size   = FRAMESIZE_SVGA;       // 800x600
-  config.jpeg_quality = 10;                   // 0-63, menor = melhor (10 = alta qualidade)
+  config.frame_size   = FRAMESIZE_QVGA;       // 320x240 (compact for MQTT)
+  config.jpeg_quality = STREAM_QUALITY;
   config.fb_count     = 1;
   config.grab_mode    = CAMERA_GRAB_WHEN_EMPTY;
 
@@ -153,6 +160,14 @@ void uploadToBackend(camera_fb_t* fb, const char* endpoint) {
   String resp = http.readString();
   Serial.printf("[Upload] %d bytes → %s response\n", fb->len, endpoint);
   http.stop();
+}
+
+// ── Frame publish to MQTT ──────────────────────────────────
+void publishFrame() {
+  camera_fb_t* fb = esp_camera_fb_get();
+  if (!fb) return;
+  mqtt.publish("greenhouse/camera/fixed/frame", (const char*)fb->buf, fb->len);
+  esp_camera_fb_return(fb);
 }
 
 // ── MQTT ────────────────────────────────────────────────────
@@ -239,6 +254,11 @@ void loop() {
   mqtt.loop();
 
   if (cameraOk) server.handleClient();
+
+  if (cameraOk && mqtt.connected() && millis() - lastFrameMs > FRAME_INTERVAL) {
+    lastFrameMs = millis();
+    publishFrame();
+  }
 
   if (millis() - lastPublish > 30000) {
     lastPublish = millis();

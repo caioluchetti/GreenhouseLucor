@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from contextlib import asynccontextmanager
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -112,7 +112,8 @@ async def lifespan(app: FastAPI):
     print(f"[MQTT] Modo: {MODE}")
     if MODE == "real":
         broker = os.environ.get("MQTT_BROKER", "localhost")
-        mqtt = RealMQTT(broker_host=broker, on_zone_state=on_zone_state, on_climate_request=on_climate_request, on_schedule_request=on_schedule_request)
+        broker_port = int(os.environ.get("MQTT_PORT", "1884"))
+        mqtt = RealMQTT(broker_host=broker, broker_port=broker_port, on_zone_state=on_zone_state, on_climate_request=on_climate_request, on_schedule_request=on_schedule_request)
     else:
         mqtt = MockMQTT(on_zone_state=on_zone_state, on_climate_request=on_climate_request, on_schedule_request=on_schedule_request)
     scheduler = Scheduler(mqtt)
@@ -446,6 +447,26 @@ async def camera_image():
     if not os.path.exists(latest_path):
         raise HTTPException(status_code=404, detail="No image available")
     return FileResponse(latest_path, media_type="image/jpeg")
+
+@app.get("/api/camera/live")
+async def camera_live():
+    def frame_generator():
+        sent = False
+        while True:
+            frame = mqtt.get_latest_frame()
+            if frame:
+                sent = True
+                yield (b"--frame\r\n"
+                       b"Content-Type: image/jpeg\r\n" +
+                       f"Content-Length: {len(frame)}\r\n\r\n".encode() + frame + b"\r\n")
+            elif not sent:
+                yield b"--frame\r\nContent-Type: text/plain\r\nContent-Length: 7\r\n\r\nWaiting\r\n"
+            time.sleep(0.2)
+    return StreamingResponse(
+        frame_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
 
 if __name__ == "__main__":
     import uvicorn

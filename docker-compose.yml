@@ -11,6 +11,7 @@ services:
     environment:
       - MQTT_MODE=${MQTT_MODE:-mock}
       - MQTT_BROKER=${MQTT_BROKER:-localhost}
+      - MQTT_PORT=${MQTT_PORT:-1884}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6001/api/time').read()"]
       interval: 30s

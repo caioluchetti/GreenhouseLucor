@@ -33,6 +33,7 @@ class MockMQTT:
         self._light_state = "off"
         self._thresholds = {"temp_high": 30.0, "temp_low": 28.0, "hum_high": None, "hum_low": None}
         self._camera_status = {"ip": "", "capture": "", "stream": ""}
+        self._latest_frame: Optional[bytes] = None
 
         self._thread = threading.Thread(target=self._sensor_loop, daemon=True)
         self._thread.start()
@@ -125,6 +126,9 @@ class MockMQTT:
     def get_camera_status(self):
         return dict(self._camera_status)
 
+    def get_latest_frame(self) -> Optional[bytes]:
+        return self._latest_frame
+
     def is_esp_online(self):
         return (time.time() - self._last_heartbeat) < 60
 
@@ -147,6 +151,7 @@ class RealMQTT:
         self._light_state = "off"
         self._last_heartbeat = 0
         self._camera_status = {"ip": "", "capture": "", "stream": ""}
+        self._latest_frame: Optional[bytes] = None
 
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="greenhouse-backend")
         self.client.on_connect = self._on_connect
@@ -162,9 +167,13 @@ class RealMQTT:
         client.subscribe("greenhouse/climate/status")
         client.subscribe("greenhouse/light/status")
         client.subscribe("greenhouse/camera/fixed/status")
+        client.subscribe("greenhouse/camera/fixed/frame")
 
     def _on_message(self, client, userdata, msg):
         topic = msg.topic
+        if topic == "greenhouse/camera/fixed/frame":
+            self._latest_frame = bytes(msg.payload)
+            return
         payload = msg.payload.decode()
         if topic == "greenhouse/status":
             self._last_heartbeat = time.time()
@@ -220,6 +229,9 @@ class RealMQTT:
 
     def get_camera_status(self):
         return dict(self._camera_status)
+
+    def get_latest_frame(self) -> Optional[bytes]:
+        return self._latest_frame
 
     def is_esp_online(self):
         return (time.time() - self._last_heartbeat) < 60

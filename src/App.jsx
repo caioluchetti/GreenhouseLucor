@@ -148,7 +148,7 @@ export default function App() {
         const res = await fetch(`${API}/camera/status`)
         if (res.ok) {
           const data = await res.json()
-          if (data.capture) setCameraUrl(data.capture)
+          if (data.ip) setCameraUrl(`${API}/camera/live`)
         }
       } catch { /* keep previous url */ }
     }

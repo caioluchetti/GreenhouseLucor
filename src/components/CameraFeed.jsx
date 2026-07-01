@@ -1,16 +1,15 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 export default function CameraFeed({ cameraUrl }) {
-  const [key, setKey] = useState(0)
+  const [connected, setConnected] = useState(false)
   const [loadError, setLoadError] = useState(false)
+  const retries = useRef(0)
 
   useEffect(() => {
     if (!cameraUrl) return
-    const interval = setInterval(() => {
-      setKey(k => k + 1)
-      setLoadError(false)
-    }, 3000)
-    return () => clearInterval(interval)
+    setConnected(false)
+    setLoadError(false)
+    retries.current = 0
   }, [cameraUrl])
 
   if (!cameraUrl) {
@@ -20,7 +19,7 @@ export default function CameraFeed({ cameraUrl }) {
           <svg className="w-8 h-8 text-(--sp-text-muted)" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
             <path d="M23 7l-5 4V7a2 2 0 00-2-2H3a2 2 0 00-2 2v10a2 2 0 002 2h13a2 2 0 002-2v-4l5 4V7z" />
           </svg>
-          <span className="text-xs text-(--sp-text-muted)">Câmera não configurada</span>
+          <span className="text-xs text-(--sp-text-muted)">Aguardando câmera...</span>
         </div>
       </div>
     )
@@ -36,15 +35,15 @@ export default function CameraFeed({ cameraUrl }) {
               <path d="M15 9l-6 6M9 9l6 6" strokeLinecap="round" />
             </svg>
             <span className="text-xs text-(--sp-text-muted)">Câmera offline</span>
-            <span className="text-[10px] text-(--sp-text-muted)">Verifique a conexão do ESP32-CAM</span>
+            <span className="text-[10px] text-(--sp-text-muted)">Verifique o ESP32-CAM</span>
           </div>
         ) : (
           <img
-            src={`${cameraUrl}?cb=${key}`}
+            src={cameraUrl}
             alt="Câmera da estufa"
             className="absolute inset-0 w-full h-full object-cover"
             onError={() => setLoadError(true)}
-            onLoad={() => setLoadError(false)}
+            onLoad={() => { setConnected(true); setLoadError(false) }}
           />
         )}
       </div>
