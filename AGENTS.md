@@ -247,6 +247,91 @@ Este projeto usa Tailwind v4 com plugin `@tailwindcss/vite`. **Não existe** `ta
 
 ---
 
+## 🔮 Futuro: Spider Cam + Timelapse (NÃO implementado — referência)
+
+### Arquitetura física
+
+```
+SPIDER CAM (pendurada no teto)
+  DevModule M3 (P4 + C6 onboard)
+    ├─ P4: TFLite inference (ESP-NN), MIPI CSI camera
+    ├─ C6: Wi-Fi 6 (HTTP + MQTT → backend)
+    └─ I2C → Arduino Nano → 2x servo (pan/tilt)
+
+CABINET (fixa, junto ao relay ESP32 existente)
+  ESP32 DevKit (relay)
+    ├─ MQTT: recebe greenhouse/camera/move/*
+    └─ I2C → Arduino Uno → CNC Shield V3 → 4x A4988 → 4x NEMA 17
+```
+
+### Regra de ouro: P4 NÃO toca na cadeia de movimento do gantry
+
+O gantry é controlado pelo ESP32 do cabinet via MQTT direto. O P4 apenas:
+- Captura fotos (MIPI CSI)
+- Roda TFLite on-device (MobileNet, int8, ~200KB)
+- Controla servos locais via I2C → Nano
+- Sobe frames via HTTPS POST /api/camera/frame (mesmo endpoint da câmera fixa)
+- Publica resultados de inferência via MQTT
+
+### Backend — O que precisa ser adicionado
+
+| Arquivo | Adição |
+|---|---|
+| `api/database.py` | Tabelas: `plant_inspections` (id, position, image_path, label, confidence, timestamp), `timelapse_positions` (id, x, y, z, label) |
+| `api/models.py` | Schemas: `InspectionResult`, `TimelapsePosition`, `CameraMoveCommand` |
+| `api/server.py` | Endpoints: `GET /api/inspections`, `POST /api/camera/move`, `POST /api/camera/inspect`, `GET /api/timelapse`, `POST /api/timelapse/start` |
+| `src/components/` | Novo componente: `SpiderCamPanel.jsx` (para dashboard tab de inspeção) |
+| `src/App.jsx` | Nova tab: `'spidercam'` com controle manual + galeria de timelapse + grade de diagnósticos |
+
+### MQTT — Tópicos novos
+
+```
+greenhouse/camera/move              Broker→ESP32  {"x":45,"y":30,"z":-50}
+greenhouse/camera/move/position/1   Broker→ESP32  {"x":45,...}
+greenhouse/camera/arrived           ESP32→Broker  "1"
+greenhouse/camera/stop              Broker→ESP32  "1"
+greenhouse/camera/status            ESP32→Broker  "idle"|"moving"|"error"
+greenhouse/camera/capture           Broker→P4     "1"
+greenhouse/camera/inspect           Broker→P4     "1"
+greenhouse/camera/result            P4→Broker     {"pos":3,"label":"blight","confidence":0.87}
+greenhouse/camera/timelapse/start   Broker→P4     "1"
+```
+
+### TFLite — Especificações
+
+| Aspecto | Valor |
+|---|---|
+| Modelo | MobileNetV2 ou V3-Small (classificação) |
+| Precisão | int8 quantizado (ESP-NN) |
+| Tamanho | ~200-500KB (cabe na PSRAM do P4) |
+| Entrada | 224×224×3, crop do frame MIPI |
+| Saída | Top-K labels com confidence |
+| Dataset | PlantVillage + fotos próprias da estufa |
+| Treino | Colab ou local → converter com `tflite_convert` → deploy via OTA ou flash |
+
+### Firmware — Notas importantes (ESP32 core 3.x)
+
+- `WiFiClientSecure` agora é `NetworkClientSecure`
+- `setFingerprint()` removido → usar `setInsecure()` para testes
+- `WebServer::on()` não aceita lambda com `Stream&` → usar função global
+- `client.printf()` sobre SSL pode corromper dados → usar `print()`/`println()` + `flush()`
+- `setSSL()` / `setServername()` não existem mais
+- `configTime(0, 0, "pool.ntp.org", "time.nist.gov")` obrigatório antes de TLS
+- Nanos/I2C: manter cabo < 30cm. Usar 100kHz. Enviar JSON compacto (`{"x":45}`)
+
+### Checklist de implementação (futuro)
+
+1. [ ] ESP32 cabinet recebe `greenhouse/camera/move` → publica `arrived`
+2. [ ] P4 se conecta ao Wi-Fi via C6 onboard → NTP → HTTPS POST funcional
+3. [ ] P4 captura MIPI CSI → JPEG → HTTPS POST `/api/camera/frame`
+4. [ ] P4 roda TFLite → publica resultado via MQTT `greenhouse/camera/result`
+5. [ ] P4 implementa loop de timelapse (3 posições, N minutos)
+6. [ ] P4 implementa rotina de inspeção (10 posições, sob demanda)
+7. [ ] Backend: migration DB + endpoints REST
+8. [ ] Frontend: tab Spider Cam + galeria + diagnósticos
+
+---
+
 ## ⚠️ Gotchas
 
 1. **Dias da semana**: Sempre em inglês (`mon`/`tue`/`wed`...). O locale não é mais usado.

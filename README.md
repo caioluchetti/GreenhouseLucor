@@ -322,29 +322,82 @@ Arquivo: `api/data/greenhouse.db` (persiste via volume Docker)
 
 ---
 
-## 📦 Hardware — Parte 2 (Spider Cam, futuro)
+## 📦 Hardware — Parte 2 (Spider Cam + Timelapse, futuro)
 
-Esta seção descreve a **segunda fase do projeto**: câmera suspensa motorizada para inspeção visual e detecção de doenças por ML.
+Esta seção descreve a **segunda fase do projeto**: câmera suspensa motorizada com 3 posições de timelapse, 10 pontos de inspeção, e detecção de doenças por ML (TFLite on-device no ESP32-P4).
 
-### Componentes necessários
+### Arquitetura — Divisão física
+
+```
+SPIDER CAM (pendurada)
+┌─────────────────────────────────────┐
+│  DevModule M3 (P4 + C6 onboard)     │
+│  ├─ P4: TFLite inference            │
+│  ├─ P4: MIPI CSI camera             │
+│  ├─ C6: Wi-Fi 6 → backend (HTTP)    │
+│  └─ C6: MQTT → broker (comandos)    │
+│            │ I2C (fio curto)        │
+│  ┌─────────▼──────────┐             │
+│  │   Arduino Nano      │             │
+│  │   servo pan + tilt  │             │
+│  └─────────────────────┘             │
+└─────────────────────────────────────┘
+
+CABINET (fixa no chão/prateleira)
+┌─────────────────────────────────────┐
+│  ESP32 DevKit (relé já existente)   │
+│  ├─ MQTT ← backend                  │
+│  ├─ MQTT: greenhouse/camera/move/*  │
+│  └─ I2C → Uno                       │
+│           │ I2C (fio curto)         │
+│  ┌────────▼──────────┐              │
+│  │   Arduino Uno      │              │
+│  │   CNC Shield V3    │              │
+│  │   4x A4988/DRV8825 │              │
+│  │   4x NEMA 17       │              │
+│  └────────────────────┘              │
+└─────────────────────────────────────┘
+```
+
+**O P4 NÃO é intermediário na cadeia de movimento.** O gantry é controlado diretamente pelo ESP32 do cabinet via MQTT. O P4 só se preocupa com visão e inferência.
+
+### Matriz de comunicação
+
+| Evento | Origem | Meio | Destino | Latência |
+|---|---|---|---|---|
+| Gantry move | Backend / P4 | MQTT | ESP32 (cabinet) → Uno → steppers | ~50ms + motor |
+| Camera aim | P4 | I2C | Nano → servos | <1ms + 300ms servo |
+| Frame upload | P4 | HTTPS POST | DDNS → Backend → /api/camera/frame | ~200ms |
+| Inferência TFLite | P4 | on-device | — | ~50-300ms |
+| Resultado ML | P4 | HTTPS POST | Backend | ~200ms |
+| Heartbeat | P4 | MQTT | Backend | ~50ms |
+
+### Componentes — Spider Cam (pendurada)
 
 | Componente | Qtd | Finalidade |
 |---|---|---|
-| **ESP32-P4 + C6** (dev board) | 1 | Cérebro da spider cam — câmera MIPI CSI + Wi-Fi 6 |
-| **Câmera MIPI CSI** (inclusa no kit) | 1 | Captura de imagens HD da estufa |
-| **Arduino Uno/Nano** | 1 | Controle dos motores de passo |
-| **CNC Shield V3** | 1 | Shield para 4 drivers de motor |
-| **Driver A4988 ou DRV8825** | 4 | Controle individual de cada NEMA 17 |
+| **DevModule M3** (P4 + C6 onboard) | 1 | Cérebro: TFLite + câmera MIPI + Wi-Fi 6 |
+| **Arduino Nano** | 1 | Controle servo pan/tilt (I2C slave do P4) |
+| **Servo MG996R** (ou similar) | 2 | Pan e tilt da câmera |
+| **Fonte 5V 2A** (step-down do 12V do cabinet) | 1 | Alimentar P4 + Nano + servos |
+| **Cabo trançado 4 vias** (I2C) | 30cm | P4 ↔ Nano |
+| **Cabo trançado 2 vias** (alimentação) | ~cabos da suspensão | Power do cabinet → spider cam |
+
+### Componentes — Cabinet (fixa)
+
+| Componente | Qtd | Finalidade |
+|---|---|---|
+| **ESP32 DevKit** (já existente — relay) | 1 | Recebe comandos MQTT → I2C → Uno |
+| **Arduino Uno** | 1 | Cinemática inversa + AccelStepper |
+| **CNC Shield V3** | 1 | Shield para 4 drivers |
+| **Driver A4988 ou DRV8825** | 4 | Controle individual dos NEMA 17 |
 | **NEMA 17 stepper motor** | 4 | Motores nos 4 cantos da estufa |
-| **Fonte chaveada 12V 10A** | 1 | Alimentar 4 motores + Arduino + ESP32-P4 |
-| **Step-down LM2596** (12V→5V) | 1 | Derivar 5V para ESP32-P4 |
-| **Resistor 1KΩ + 2KΩ** (1/4W) | 2 cada | Divisor de tensão UART Arduino(5V)→P4(3.3V) |
+| **Fonte chaveada 12V 10A** | 1 | Alimentar 4 motores + Uno/ESP32 + spider cam |
+| **Step-down LM2596** (12V→5V) | 1 | Derivar 5V para alimentar spider cam |
 | **Cooler 40mm 12V** | 1 | Resfriar drivers durante movimento |
 | **Dissipador A4988** adesivo | 8 | Drivers esquentam muito |
-| **Barrel jack DC fêmea** | 2 | Conector de alimentação |
-| **Fio 22 AWG** (vermelho + preto) | 4m | Ligações de potência |
 
-### Componentes mecânicos
+### Componentes — Mecânicos
 
 | Componente | Qtd | Finalidade |
 |---|---|---|
@@ -358,21 +411,7 @@ Esta seção descreve a **segunda fase do projeto**: câmera suspensa motorizada
 | Abraçadeira nylon 100mm | 20 | Organização de cabos |
 | Eletroduto corrugado 10mm | 2m | Conduíte para fios dos motores |
 
-### Arquitetura da Spider Cam
-
-```
-                    ESP32-P4+C6 (câmera + Wi-Fi)
-                         │
-            ┌────────────┼────────────┐
-            │ UART        │ MIPI CSI   │ Wi-Fi 6
-            ▼             ▼            ▼
-     Arduino Uno      Câmera HD     MQTT Broker
-     CNC Shield V3                  (mosquitto)
-     4x A4988/DRV8825
-     4x NEMA 17
-```
-
-### Cinemática Inversa
+### Cinemática Inversa (roda no Arduino Uno)
 
 4 motores nos cantos do teto, cabos convergindo para a câmera central:
 
@@ -391,39 +430,72 @@ Onde i = 0..3:
   (x, y, z) = posição desejada da câmera (z < H)
 ```
 
-O Arduino recebe coordenadas (x,y,z) via UART do ESP32-P4, calcula os 4 comprimentos de cabo, converte para passos dos motores, e move os 4 simultaneamente com AccelStepper.
+O Uno recebe coordenadas `{"x":45,"y":30,"z":-50}` via I2C do ESP32 (cabinet), calcula os 4 comprimentos de cabo, converte para passos, e move os 4 motores simultaneamente com AccelStepper.
 
-### Tópicos MQTT novos (Spider Cam)
+### Tópicos MQTT — Spider Cam + Timelapse
 
 | Tópico | Direção | Payload | Descrição |
 |---|---|---|---|
-| `greenhouse/camera/move` | Broker → ESP-P4 | `"x,y,z"` | Move câmera para coordenadas |
-| `greenhouse/camera/stop` | Broker → ESP-P4 | `"1"` | Parada de emergência |
-| `greenhouse/camera/position` | ESP-P4 → Broker | `"x,y,z"` | Posição atual após movimento |
-| `greenhouse/camera/status` | ESP-P4 → Broker | `"idle"\|"moving"\|"error"` | Estado da spider cam |
-| `greenhouse/camera/capture` | Broker → ESP-P4 | `"1"` | Dispara foto |
-| `greenhouse/camera/fixed/capture` | Broker → ESP32-CAM | `"1"` | Dispara câmera fixa (overview) |
+| `greenhouse/camera/move` | Broker → ESP32 (cabinet) | `{"x":45,"y":30,"z":-50}` | Move gantry para coordenadas |
+| `greenhouse/camera/move/position/{1..3}` | Broker → ESP32 (cabinet) | `{"x":45}"` | Move para posição pré-definida do timelapse |
+| `greenhouse/camera/arrived` | ESP32 (cabinet) → Broker | `"1"` | Gantry chegou na posição |
+| `greenhouse/camera/stop` | Broker → ESP32 (cabinet) | `"1"` | Parada de emergência |
+| `greenhouse/camera/status` | ESP32 (cabinet) → Broker | `"idle"\|"moving"\|"error"` | Estado do gantry |
+| `greenhouse/camera/capture` | Broker → P4 | `"1"` | Tira foto manual |
+| `greenhouse/camera/inspect` | Broker → P4 | `"1"` | Inicia rotina completa de inspeção (10 pontos) |
+| `greenhouse/camera/result` | P4 → Broker | `{"pos":3,"label":"blight","confidence":0.87}` | Resultado da inferência |
+| `greenhouse/camera/timelapse/start` | Broker → P4 | `"1"` | Inicia timelapse automático |
+| `greenhouse/camera/frame` | P4 → Backend (HTTP POST) | JPEG bytes | Upload de frame (mesmo endpoint da câmera fixa) |
 
-### Fluxo de captura + ML
+> **Nota**: `greenhouse/camera/frame` usa HTTP POST, não MQTT. É o mesmo endpoint `/api/camera/frame` que a câmera fixa (ESP32-CAM) já usa. O P4 também publica frames via MQTT no mesmo formato se desejar stream contínua, mas a rota HTTP já está pronta.
+
+### Fluxo — Timelapse (3 posições, autônomo)
 
 ```
-1. Usuário posiciona câmera no UI → POST /api/camera/move {x,y,z}
-2. Backend publica MQTT → ESP32-P4 → UART → Arduino move motores
-3. Arduino confirma posição → P4 publica position → UI mostra "pronto"
-4. Usuário clica "Fotografar" → POST /api/camera/capture
-5. P4 captura frame MIPI CSI → JPEG → HTTP POST /api/camera/upload
-6. Backend salva imagem no disco + SQLite
-7. Backend roda inferência ONNX (detecção de doenças)
-8. Resultado aparece no UI com diagnóstico e confiança
+1. P4 scheduler interno dispara a cada N minutos
+2. P4 publica MQTT → greenhouse/camera/move/position/1
+3. ESP32 (cabinet) move gantry → publica greenhouse/camera/arrived
+4. P4 recebe "arrived" → I2C → Nano → servos enquadram
+5. P4 captura MIPI CSI → HTTPS POST /api/camera/frame
+6. P4 publica MQTT → greenhouse/camera/move/position/2
+7. Repete passos 2-5 para posições 2 e 3
+8. Aguarda intervalo → reinicia ciclo
 ```
+
+### Fluxo — Inspeção de doenças (10 pontos, sob demanda)
+
+```
+1. Usuário clica "Inspecionar" no dashboard → POST /api/camera/inspect
+2. Backend publica MQTT → greenhouse/camera/inspect
+3. P4 itera sobre 10 posições pré-definidas:
+   a. P4 publica MQTT → greenhouse/camera/move {"x":x_i,"y":y_i,"z":z_i}
+   b. Aguarda greenhouse/camera/arrived
+   c. I2C → Nano → servos enquadram
+   d. Captura MIPI CSI → roda TFLite (MobileNet quantizado int8)
+   e. Publica resultado → greenhouse/camera/result
+4. Backend salva cada resultado → frontend mostra grade de diagnósticos
+```
+
+### TFLite on-device (ESP32-P4)
+
+| Aspecto | Valor |
+|---|---|
+| Framework | TensorFlow Lite Micro + ESP-NN |
+| Modelo | MobileNetV2 ou MobileNetV3-Small |
+| Tamanho | ~200-500KB (int8 quantizado) |
+| Entrada | 224×224×3, crop do frame MIPI |
+| Saída | Vetor de probabilidades (classes de doença) |
+| Dataset de treino | PlantVillage + capturas próprias da estufa |
+| Latência | ~50-300ms por inferência (acelerador ESP-NN) |
 
 ### Custo estimado da Parte 2
 
 | Categoria | Valor (R$) |
 |---|---|
-| Eletrônica (fonte, drivers, step-down, fios, etc.) | 70-105 |
+| Spider Cam (P4+C6 dev module + Nano + servos) | 120-160 |
+| Cabinet (Uno + CNC Shield + 4x drivers + 4x NEMA 17) | 250-350 |
 | Mecânica (cabos, roldanas, cantoneiras, parafusos etc.) | 160-230 |
-| **Total** | **230-335** |
+| **Total** | **530-740** |
 
 ---
 
