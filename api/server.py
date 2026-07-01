@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from contextlib import asynccontextmanager
@@ -32,6 +32,9 @@ mqt = None
 mqtt = None
 scheduler = None
 _history_running = True
+
+_latest_frame: bytes | None = None
+_last_frame_time: float = 0.0
 
 
 def _sensor_history_loop():
@@ -423,7 +426,12 @@ async def clear_sensor_history(db: Session = Depends(get_db)):
 
 @app.get("/api/camera/status", response_model=CameraStatusResponse)
 async def camera_status():
-    return CameraStatusResponse(**mqtt.get_camera_status())
+    status = dict(mqtt.get_camera_status())
+    if not status.get("ip") and time.time() - _last_frame_time < 10:
+        status["ip"] = "connected"
+        status["capture"] = "/api/camera/image"
+        status["stream"] = "/api/camera/live"
+    return CameraStatusResponse(**status)
 
 @app.post("/api/camera/capture")
 async def camera_capture():
@@ -441,6 +449,13 @@ async def camera_upload(image: UploadFile = File(...)):
     shutil.copyfile(filepath, latest_path)
     return {"status": "saved", "filename": filename}
 
+@app.post("/api/camera/frame")
+async def camera_frame(request: Request):
+    global _latest_frame, _last_frame_time
+    _latest_frame = await request.body()
+    _last_frame_time = time.time()
+    return {"status": "ok", "size": len(_latest_frame)}
+
 @app.get("/api/camera/image")
 async def camera_image():
     latest_path = os.path.join(UPLOAD_DIR, "latest.jpg")
@@ -453,7 +468,7 @@ async def camera_live():
     def frame_generator():
         sent = False
         while True:
-            frame = mqtt.get_latest_frame()
+            frame = _latest_frame
             if frame:
                 sent = True
                 yield (b"--frame\r\n"

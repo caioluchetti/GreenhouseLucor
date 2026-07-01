@@ -4,46 +4,40 @@
  * Hardware: ESP32-CAM (AI Thinker) com OV2640
  *
  * Funcionalidades:
- *   - Wi-Fi + MQTT (conecta ao broker da estufa)
+ *   - Wi-Fi
  *   - Servidor HTTP na porta 80:
  *       /capture  → snapshot JPEG
  *       /stream   → MJPEG stream (abre no navegador)
- *   - Publica greenhouse/camera/fixed/status com URLs da câmera
- *   - Assina greenhouse/camera/fixed/capture → tira foto → POST /api/camera/upload
- *   - Heartbeat a cada 30s
+ *   - Envia frames via HTTPS POST para o backend (DDNS)
+ *   - A cada ~500ms captura e envia um frame JPEG
  *
  * Build: Arduino IDE, board: "AI Thinker ESP32-CAM"
  *
- * Depends on (Library Manager):
- *   - PubSubClient (Nick O'Leary)
+ * Dependências:
  *   - (esp_camera.h — built-in on ESP32 Arduino core 2.0+)
  *   - (WiFi.h — built-in)
  *   - (WebServer.h — built-in)
+ *   - (WiFiClientSecure.h — built-in)
  */
-#define MQTT_MAX_PACKET_SIZE 65536
 
 #include <WiFi.h>
 #include <WebServer.h>
 #include <esp_camera.h>
 #include <WiFiClientSecure.h>
-#include <PubSubClient.h>
 
 // ── Configuração ──────────────────────────────────────────
 const char* WIFI_SSID     = "SEU_WIFI";
 const char* WIFI_PASS     = "SUA_SENHA";
-const char* MQTT_BROKER   = "greenhousemqtt.cortada-server.ddns.net";
-const int   MQTT_PORT     = 8883;
-const char* MQTT_CLIENT   = "esp32cam-greenhouse";
-
-const char* BACKEND_HOST  = "192.168.1.100";   // IP do servidor backend
-const int   BACKEND_PORT  = 6001;
+const char* BACKEND_HOST  = "grenhousemqtt.cortada-server.ddns.net";
+const int   BACKEND_PORT  = 443;
+const char* BACKEND_PATH  = "/api/camera/frame";
 
 // ── Stream settings ───────────────────────────────────────
-#define STREAM_QUALITY 25       // JPEG quality 0-63 (25 = compact for MQTT)
-#define FRAME_INTERVAL  300     // ms between MQTT frame publishes
+#define STREAM_QUALITY 25       // JPEG quality 0-63 (25 = compact)
+#define FRAME_INTERVAL  500     // ms between frame uploads
 
 // ── Camera pinout (AI Thinker ESP32-CAM) ─────────────────
-#define CAM_PIN_PWDN    -1
+#define CAM_PIN_PWDN    32
 #define CAM_PIN_RESET   -1
 #define CAM_PIN_XCLK    0
 #define CAM_PIN_SIOD    26
@@ -62,13 +56,9 @@ const int   BACKEND_PORT  = 6001;
 
 // ── Globals ────────────────────────────────────────────────
 WebServer server(80);
-WiFiClientSecure espClient;
-PubSubClient mqtt(espClient);
-unsigned long lastPublish = 0;
+WiFiClientSecure client;
 unsigned long lastFrameMs = 0;
 bool cameraOk = false;
-String streamUrl = "";
-String captureUrl = "";
 
 // ── Camera init ────────────────────────────────────────────
 bool initCamera() {
@@ -89,7 +79,7 @@ bool initCamera() {
   config.pin_reset    = CAM_PIN_RESET;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size   = FRAMESIZE_QVGA;       // 320x240 (compact for MQTT)
+  config.frame_size   = FRAMESIZE_QVGA;       // 320x240
   config.jpeg_quality = STREAM_QUALITY;
   config.fb_count     = 1;
   config.grab_mode    = CAMERA_GRAB_WHEN_EMPTY;
@@ -111,107 +101,65 @@ void handleCapture() {
 }
 
 void handleStream() {
-  WiFiClient client = server.client();
-  client.println("HTTP/1.1 200 OK");
-  client.println("Content-Type: multipart/x-mixed-replace; boundary=frame");
-  client.println();
+  WiFiClient streamClient = server.client();
+  streamClient.println("HTTP/1.1 200 OK");
+  streamClient.println("Content-Type: multipart/x-mixed-replace; boundary=frame");
+  streamClient.println();
 
-  while (client.connected()) {
+  while (streamClient.connected()) {
     camera_fb_t* fb = esp_camera_fb_get();
     if (!fb) { delay(100); continue; }
-    client.printf("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", fb->len);
-    client.write(fb->buf, fb->len);
-    client.print("\r\n");
+    streamClient.printf("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", fb->len);
+    streamClient.write(fb->buf, fb->len);
+    streamClient.print("\r\n");
     esp_camera_fb_return(fb);
     delay(50);
   }
 }
 
-// ── Image upload to backend ─────────────────────────────────
-void uploadToBackend(camera_fb_t* fb, const char* endpoint) {
-  WiFiClient http;
-  if (!http.connect(BACKEND_HOST, BACKEND_PORT)) {
-    Serial.println("[Upload] Connection failed");
-    return;
-  }
-
-  String boundary = "tatufaBoundary";
-  String head = "--" + boundary + "\r\n";
-  head += "Content-Disposition: form-data; name=\"image\"; filename=\"capture.jpg\"\r\n";
-  head += "Content-Type: image/jpeg\r\n\r\n";
-  String tail = "\r\n--" + boundary + "--\r\n";
-
-  size_t totalLen = head.length() + fb->len + tail.length();
-
-  http.printf("POST %s HTTP/1.1\r\n", endpoint);
-  http.printf("Host: %s:%d\r\n", BACKEND_HOST, BACKEND_PORT);
-  http.printf("Content-Type: multipart/form-data; boundary=%s\r\n", boundary.c_str());
-  http.printf("Content-Length: %d\r\n", totalLen);
-  http.print("Connection: close\r\n\r\n");
-
-  http.print(head);
-  http.write(fb->buf, fb->len);
-  http.print(tail);
-
-  while (http.connected() && !http.available()) delay(10);
-  String resp = http.readString();
-  Serial.printf("[Upload] %d bytes → %s response\n", fb->len, endpoint);
-  http.stop();
-}
-
-// ── Frame publish to MQTT ──────────────────────────────────
-void publishFrame() {
+// ── Frame upload ───────────────────────────────────────────
+bool uploadFrame() {
   camera_fb_t* fb = esp_camera_fb_get();
-  if (!fb) return;
-  mqtt.publish("greenhouse/camera/fixed/frame", (const char*)fb->buf, fb->len);
-  esp_camera_fb_return(fb);
-}
+  if (!fb) return false;
 
-// ── MQTT ────────────────────────────────────────────────────
-void publishCameraStatus() {
-  if (WiFi.status() != WL_CONNECTED) return;
-  String ip = WiFi.localIP().toString();
-  captureUrl = "http://" + ip + "/capture";
-  streamUrl  = "http://" + ip + "/stream";
-
-  String payload = "{\"ip\":\"" + ip + "\",\"capture\":\"" + captureUrl + "\",\"stream\":\"" + streamUrl + "\"}";
-  mqtt.publish("greenhouse/camera/fixed/status", payload.c_str());
-}
-
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  String t(topic);
-  if (t == "greenhouse/camera/fixed/capture") {
-    camera_fb_t* fb = esp_camera_fb_get();
-    if (!fb) { Serial.println("[Capture] Failed"); return; }
-    uploadToBackend(fb, "/api/camera/upload");
+  if (!client.connect(BACKEND_HOST, BACKEND_PORT)) {
+    Serial.println("[Upload] Connection failed");
     esp_camera_fb_return(fb);
+    return false;
   }
+
+  client.printf("POST %s HTTP/1.1\r\n", BACKEND_PATH);
+  client.printf("Host: %s\r\n", BACKEND_HOST);
+  client.printf("Content-Type: image/jpeg\r\n");
+  client.printf("Content-Length: %d\r\n", fb->len);
+  client.print("Connection: close\r\n\r\n");
+  client.write(fb->buf, fb->len);
+
+  unsigned long timeout = millis() + 5000;
+  while (millis() < timeout && !client.available()) delay(10);
+  while (client.available()) client.read();
+  client.stop();
+  esp_camera_fb_return(fb);
+  return true;
 }
 
-void reconnectMQTT() {
-  while (!mqtt.connected()) {
-    Serial.print("MQTT...");
-    if (mqtt.connect(MQTT_CLIENT)) {
-      Serial.println(" OK");
-      mqtt.subscribe("greenhouse/camera/fixed/capture");
-      publishCameraStatus();
-    } else { delay(2000); }
-  }
-}
-
-// ── Wi-Fi ────────────────────────────────────────────────────
+// ── Wi-Fi ──────────────────────────────────────────────────
 void connectWiFi() {
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   Serial.print("WiFi");
-  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
-  Serial.println(" OK");
-  Serial.print("IP: "); Serial.println(WiFi.localIP());
-
-  // TLS para MQTT remoto (insecure — sem verificação de certificado)
-  espClient.setInsecure();
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+    delay(500); Serial.print("."); attempts++;
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println(" OK");
+    Serial.print("IP: "); Serial.println(WiFi.localIP());
+  } else {
+    Serial.println(" FAILED");
+  }
 }
 
-// ── Setup / Loop ─────────────────────────────────────────────
+// ── Setup / Loop ───────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
   delay(50);
@@ -220,13 +168,17 @@ void setup() {
   if (cameraOk) {
     sensor_t* s = esp_camera_sensor_get();
     if (s) {
-      s->set_vflip(s, 1);     // corrige orientação (câmera de ponta-cabeça)
+      s->set_vflip(s, 1);
       s->set_brightness(s, 1);
       s->set_saturation(s, 0);
     }
+    Serial.println("[Camera] OK");
   }
 
   connectWiFi();
+
+  client.setInsecure();
+  Serial.println("[HTTPS] TLS verification disabled (insecure)");
 
   if (cameraOk) {
     server.on("/capture", HTTP_GET, handleCapture);
@@ -234,25 +186,14 @@ void setup() {
     server.begin();
     Serial.println("[HTTP] Server started on :80");
   }
-
-  mqtt.setServer(MQTT_BROKER, MQTT_PORT);
-  mqtt.setCallback(mqttCallback);
 }
 
 void loop() {
   if (WiFi.status() != WL_CONNECTED) connectWiFi();
-  if (!mqtt.connected()) reconnectMQTT();
-  mqtt.loop();
-
   if (cameraOk) server.handleClient();
 
-  if (cameraOk && mqtt.connected() && millis() - lastFrameMs > FRAME_INTERVAL) {
+  if (cameraOk && WiFi.status() == WL_CONNECTED && millis() - lastFrameMs > FRAME_INTERVAL) {
     lastFrameMs = millis();
-    publishFrame();
-  }
-
-  if (millis() - lastPublish > 30000) {
-    lastPublish = millis();
-    publishCameraStatus();
+    uploadFrame();
   }
 }
