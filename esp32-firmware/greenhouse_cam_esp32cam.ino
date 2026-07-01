@@ -35,9 +35,6 @@ const char* MQTT_BROKER   = "greenhousemqtt.cortada-server.ddns.net";
 const int   MQTT_PORT     = 8883;
 const char* MQTT_CLIENT   = "esp32cam-greenhouse";
 
-// Fingerprint SHA1 do certificado TLS (deixe "" para insecure)
-const char* MQTT_TLS_FINGERPRINT = "36:12:05:B8:85:08:C1:9B:A0:F0:FA:6B:CC:C2:F2:8B:79:56:23:E7";
-
 const char* BACKEND_HOST  = "192.168.1.100";   // IP do servidor backend
 const int   BACKEND_PORT  = 6001;
 
@@ -210,14 +207,8 @@ void connectWiFi() {
   Serial.println(" OK");
   Serial.print("IP: "); Serial.println(WiFi.localIP());
 
-  // TLS para MQTT remoto
-  if (strlen(MQTT_TLS_FINGERPRINT) > 0) {
-    espClient.setFingerprint(MQTT_TLS_FINGERPRINT);
-    Serial.println("[TLS] Fingerprint verification enabled");
-  } else {
-    espClient.setInsecure();
-    Serial.println("[TLS] WARNING: Certificate verification disabled (insecure)");
-  }
+  // TLS para MQTT remoto (insecure — sem verificação de certificado)
+  espClient.setInsecure();
 }
 
 // ── Setup / Loop ─────────────────────────────────────────────
@@ -239,7 +230,7 @@ void setup() {
 
   if (cameraOk) {
     server.on("/capture", HTTP_GET, handleCapture);
-    server.on("/stream",  HTTP_GET, [](Stream& s){ handleStream(); });
+    server.on("/stream",  HTTP_GET, handleStream);
     server.begin();
     Serial.println("[HTTP] Server started on :80");
   }
