@@ -29,7 +29,7 @@
 // ── Configuração ──────────────────────────────────────────
 const char* WIFI_SSID     = "SEU_WIFI";
 const char* WIFI_PASS     = "SUA_SENHA";
-const char* BACKEND_HOST  = "grenhousemqtt.cortada-server.ddns.net";
+const char* BACKEND_HOST  = "greenhouse.cortada-server.ddns.net";
 const int   BACKEND_PORT  = 443;
 const char* BACKEND_PATH  = "/api/camera/frame";
 
@@ -125,6 +125,9 @@ bool uploadFrame() {
 
   Serial.printf("[Upload] Capture %dB, heap=%d, connecting...\n", fb->len, ESP.getFreeHeap());
 
+  client.setSSL(false);
+  client.setServername(BACKEND_HOST);
+
   if (!client.connect(BACKEND_HOST, BACKEND_PORT)) {
     IPAddress resolved;
     if (WiFi.hostByName(BACKEND_HOST, resolved)) {
@@ -137,12 +140,18 @@ bool uploadFrame() {
     return false;
   }
 
-  client.printf("POST %s HTTP/1.1\r\n", BACKEND_PATH);
-  client.printf("Host: %s\r\n", BACKEND_HOST);
-  client.printf("Content-Type: image/jpeg\r\n");
-  client.printf("Content-Length: %d\r\n", fb->len);
-  client.print("Connection: close\r\n\r\n");
+  client.print("POST ");
+  client.print(BACKEND_PATH);
+  client.println(" HTTP/1.1");
+  client.print("Host: ");
+  client.println(BACKEND_HOST);
+  client.println("Content-Type: image/jpeg");
+  client.print("Content-Length: ");
+  client.println(fb->len);
+  client.println("Connection: close");
+  client.println();
   client.write(fb->buf, fb->len);
+  client.flush();
 
   unsigned long timeout = millis() + 5000;
   while (millis() < timeout && !client.available()) delay(10);
@@ -205,6 +214,9 @@ void setup() {
   }
 
   connectWiFi();
+
+  client.setInsecure();
+  Serial.println("[HTTPS] TLS verification disabled (insecure)");
 
   client.setInsecure();
   Serial.println("[HTTPS] TLS verification disabled (insecure)");
