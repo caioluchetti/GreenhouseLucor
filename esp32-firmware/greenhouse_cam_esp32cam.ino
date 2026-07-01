@@ -123,6 +123,8 @@ bool uploadFrame() {
   camera_fb_t* fb = esp_camera_fb_get();
   if (!fb) return false;
 
+  Serial.printf("[Upload] Capture %dB, heap=%d, connecting...\n", fb->len, ESP.getFreeHeap());
+
   if (!client.connect(BACKEND_HOST, BACKEND_PORT)) {
     IPAddress resolved;
     if (WiFi.hostByName(BACKEND_HOST, resolved)) {
@@ -144,7 +146,13 @@ bool uploadFrame() {
 
   unsigned long timeout = millis() + 5000;
   while (millis() < timeout && !client.available()) delay(10);
-  while (client.available()) client.read();
+  if (client.available()) {
+    int statusCode = client.parseInt();
+    Serial.printf("[Upload] HTTP %d\n", statusCode);
+    while (client.available()) client.read();
+  } else {
+    Serial.println("[Upload] No response (timeout)");
+  }
   client.stop();
   esp_camera_fb_return(fb);
   return true;
