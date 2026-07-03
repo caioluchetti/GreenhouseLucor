@@ -144,7 +144,7 @@ unsigned long lastLcdPageSwitch = 0;
 unsigned long lastLcdRefresh    = 0;
 int           lcdPage           = 0;
 const int     LCD_PAGE_COUNT    = 3;
-const unsigned long LCD_PAGE_MS = 3000;   // switch page every 3s
+const unsigned long LCD_PAGE_MS = 5000;   // switch page every 3s
 const unsigned long LCD_REFRESH_MS = 500; // refresh content every 500ms
 
 // Cached sensor values for LCD (updated by sensor read)
@@ -214,10 +214,10 @@ void lcdRenderPage() {
       lcd.setCursor(0, 1);
       bool wifiOk = (WiFi.status() == WL_CONNECTED);
       bool mqttOk = mqtt.connected();
-      snprintf(line, sizeof(line), "W%c M%c N%c",
-               wifiOk ? '+' : '-',
-               mqttOk ? '+' : '-',
-               timeSynced ? '+' : '-');
+      snprintf(line, sizeof(line), "W:%s M:%s N:%s", 
+               wifiOk ? "OK" : "--", 
+               mqttOk ? "OK" : "--", 
+               timeSynced ? "OK" : "--");
       lcd.print(line);
       break;
     }
