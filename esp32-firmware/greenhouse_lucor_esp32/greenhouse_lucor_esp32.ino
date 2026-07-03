@@ -51,8 +51,8 @@
 #include <Wire.h>
 
 // ── Configuração ──────────────────────────────────────────
-const char* WIFI_SSID     = "SEU_WIFI";
-const char* WIFI_PASS     = "SUA_SENHA";
+const char* WIFI_SSID     = "Toca do Tatu 2.4G";
+const char* WIFI_PASS     = "tamandua123";
 const char* MQTT_BROKER   = "greenhousemqtt.cortada-server.ddns.net";
 const int   MQTT_PORT     = 8883;
 const char* MQTT_CLIENT   = "esp32-greenhouse";
@@ -64,16 +64,18 @@ const char* MQTT_CLIENT   = "esp32-greenhouse";
 const char* MQTT_TLS_FINGERPRINT = "55:3C:48:09:40:6C:C9:04:59:68:F0:C4:C4:CD:D9:96:23:E6:F7:74";
 
 // ── Pinos ─────────────────────────────────────────────────
-#define DHTPIN       15
-#define DHTPIN_OUT   4
-#define DHTTYPE_IN   DHT22
+// ── Pinos ─────────────────────────────────────────────────
+#define DHTPIN       32  // Inside DHT
+#define DHTPIN_OUT   33  // Outside DHT
+#define DHTTYPE_IN   DHT11
 #define DHTTYPE_OUT  DHT11
 
+// Relays
 #define RELAY_Z1    26
-#define RELAY_Z2    27
-#define RELAY_Z3    14
+#define RELAY_Z2    18   // Moved from 27 (freed for LCD_SCL)
+#define RELAY_Z3    19   // Moved from 14 (freed for LCD_SDA)
 #define RELAY_FAN   25
-#define RELAY_LIGHT 33
+#define RELAY_LIGHT 15   // Moved from 33 (freed for DHTPIN_OUT)
 
 #define RELAY_ON    LOW
 #define RELAY_OFF   HIGH
@@ -82,8 +84,8 @@ const char* MQTT_TLS_FINGERPRINT = "55:3C:48:09:40:6C:C9:04:59:68:F0:C4:C4:CD:D9
 #define LCD_ADDR    0x27
 #define LCD_COLS    16
 #define LCD_ROWS    2
-#define LCD_SDA     21
-#define LCD_SCL     22
+#define LCD_SDA     14   // Your chosen left-side pin
+#define LCD_SCL     27   // Your chosen left-side pin
 
 // ── Scheduler ──────────────────────────────────────────────
 #define MAX_SCHEDULES  20
@@ -132,7 +134,7 @@ unsigned long lastSchedCheck     = 0;
 unsigned long lastNtpSync        = 0;
 bool          timeSynced         = false;
 
-const unsigned long SENSOR_INTERVAL_MS  = 30000;
+const unsigned long SENSOR_INTERVAL_MS  = 3000;
 const unsigned long NTP_INTERVAL_MS     = 86400000;  // daily
 
 // ── LCD ────────────────────────────────────────────────────
@@ -414,13 +416,10 @@ void connectWiFi() {
   Serial.print("IP: "); Serial.println(WiFi.localIP());
 
   // TLS para MQTT remoto via greenhousemqtt.cortada-server.ddns.net:8883
-  if (strlen(MQTT_TLS_FINGERPRINT) > 0) {
-    espClient.setFingerprint(MQTT_TLS_FINGERPRINT);
-    Serial.println("[TLS] Fingerprint verification enabled");
-  } else {
+
     espClient.setInsecure();
     Serial.println("[TLS] WARNING: Certificate verification disabled (insecure)");
-  }
+  
 }
 
 // ── MQTT Publish ───────────────────────────────────────────
@@ -616,12 +615,11 @@ void loop() {
   // ── Sensor publish (only when MQTT connected) ──
   if (mqtt.connected() && now - lastSensorPublish > SENSOR_INTERVAL_MS) {
     lastSensorPublish = now;
-
     float tempIn  = dhtIn.readTemperature();
     float humIn   = dhtIn.readHumidity();
     float tempOut = dhtOut.readTemperature();
     float humOut  = dhtOut.readHumidity();
-
+    Serial.printf("DHT Published %.1f In  %.1f hum In %.1f Out  %.1f hum out\n", tempIn, humIn, tempOut, humOut);
     // Cache for LCD display
     lcdTempIn  = tempIn;
     lcdHumIn   = humIn;
