@@ -2,11 +2,16 @@
  * Tatufa — ESP32 firmware (autonomous mode)
  *
  * Hardware:
- *   - 3 relays: irrigation zones 1/2/3 (GPIO 26/27/14)
- *   - 1 relay: exhaust fan (GPIO 25)
- *   - 1 relay: grow light (GPIO 33)
+ *   - 8-channel relay module (5 of 8 channels used):
+ *       CH1 = Zone 1 irrigation (GPIO 26)
+ *       CH2 = Zone 2 irrigation (GPIO 27)
+ *       CH3 = Zone 3 irrigation (GPIO 14)
+ *       CH4 = Exhaust fan       (GPIO 25)
+ *       CH5 = Grow light        (GPIO 33)
+ *       CH6-CH8 = spare (not wired)
  *   - DHT22: temperature + humidity inside (GPIO 15)
  *   - DHT11: temperature + humidity outside (GPIO 4)
+ *   - LCD 16x2 with I2C backpack (address 0x27, GPIO 21=SDA, GPIO 22=SCL)
  *
  * Autonomous mode:
  *   - NTP time sync on boot + daily resync
@@ -28,6 +33,7 @@
  *   - PubSubClient   (Library Manager — MQTT)
  *   - DHT sensor library by Adafruit
  *   - ArduinoJson    (Library Manager — parsing JSON)
+ *   - LiquidCrystal_I2C (Library Manager — LCD 16x2 via PCF8574)
  *   - Preferences    (built-in, for NVS)
  *   - time.h         (built-in, for NTP)
  *
@@ -41,6 +47,8 @@
 #include <DHT.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
+#include <LiquidCrystal_I2C.h>
+#include <Wire.h>
 
 // ── Configuração ──────────────────────────────────────────
 const char* WIFI_SSID     = "SEU_WIFI";
@@ -69,6 +77,13 @@ const char* MQTT_TLS_FINGERPRINT = "36:12:05:B8:85:08:C1:9B:A0:F0:FA:6B:CC:C2:F2
 
 #define RELAY_ON    LOW
 #define RELAY_OFF   HIGH
+
+// ── LCD I2C ───────────────────────────────────────────────
+#define LCD_ADDR    0x27
+#define LCD_COLS    16
+#define LCD_ROWS    2
+#define LCD_SDA     21
+#define LCD_SCL     22
 
 // ── Scheduler ──────────────────────────────────────────────
 #define MAX_SCHEDULES  20
@@ -119,6 +134,104 @@ bool          timeSynced         = false;
 
 const unsigned long SENSOR_INTERVAL_MS  = 30000;
 const unsigned long NTP_INTERVAL_MS     = 86400000;  // daily
+
+// ── LCD ────────────────────────────────────────────────────
+LiquidCrystal_I2C lcd(LCD_ADDR, LCD_COLS, LCD_ROWS);
+
+unsigned long lastLcdPageSwitch = 0;
+unsigned long lastLcdRefresh    = 0;
+int           lcdPage           = 0;
+const int     LCD_PAGE_COUNT    = 3;
+const unsigned long LCD_PAGE_MS = 3000;   // switch page every 3s
+const unsigned long LCD_REFRESH_MS = 500; // refresh content every 500ms
+
+// Cached sensor values for LCD (updated by sensor read)
+float lcdTempIn  = NAN;
+float lcdHumIn   = NAN;
+float lcdTempOut = NAN;
+float lcdHumOut  = NAN;
+
+// ── LCD display ───────────────────────────────────────────
+void lcdShowBoot() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Tatufa  boot...");
+  lcd.setCursor(0, 1);
+  lcd.print("Connecting WiFi");
+}
+
+void lcdPrintFloat(float v, int dec) {
+  if (isnan(v)) {
+    lcd.print("--");
+  } else {
+    char buf[8];
+    dtostrf(v, 4, dec, buf);
+    lcd.print(buf);
+  }
+}
+
+void lcdRenderPage() {
+  char line[17];
+
+  switch (lcdPage) {
+    case 0:  // Sensors inside + outside
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      snprintf(line, sizeof(line), "In: ");
+      lcd.print(line);
+      lcdPrintFloat(lcdTempIn, 1);
+      lcd.print("C ");
+      lcdPrintFloat(lcdHumIn, 0);
+      lcd.print("%");
+      lcd.setCursor(0, 1);
+      lcd.print("Out:");
+      lcdPrintFloat(lcdTempOut, 1);
+      lcd.print("C ");
+      lcdPrintFloat(lcdHumOut, 0);
+      lcd.print("%");
+      break;
+
+    case 1:  // Zone + fan status
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      snprintf(line, sizeof(line), "Z1:%s Z2:%s",
+               zoneStates[0], zoneStates[1]);
+      lcd.print(line);
+      lcd.setCursor(0, 1);
+      snprintf(line, sizeof(line), "Z3:%s Fan:%s",
+               zoneStates[2], fanState ? "ON" : "OFF");
+      lcd.print(line);
+      break;
+
+    case 2: {  // Light + connectivity status
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      snprintf(line, sizeof(line), "Light:%s",
+               lightState ? "ON" : "OFF");
+      lcd.print(line);
+      lcd.setCursor(0, 1);
+      bool wifiOk = (WiFi.status() == WL_CONNECTED);
+      bool mqttOk = mqtt.connected();
+      snprintf(line, sizeof(line), "W%c M%c N%c",
+               wifiOk ? '+' : '-',
+               mqttOk ? '+' : '-',
+               timeSynced ? '+' : '-');
+      lcd.print(line);
+      break;
+    }
+  }
+}
+
+void updateLcd(unsigned long now) {
+  if (now - lastLcdPageSwitch > LCD_PAGE_MS) {
+    lastLcdPageSwitch = now;
+    lcdPage = (lcdPage + 1) % LCD_PAGE_COUNT;
+    lcdRenderPage();
+  } else if (now - lastLcdRefresh > LCD_REFRESH_MS) {
+    lastLcdRefresh = now;
+    lcdRenderPage();  // refresh in-place so live values update
+  }
+}
 
 // ── NTP ────────────────────────────────────────────────────
 void syncTime() {
@@ -220,6 +333,7 @@ void setRelay(int zone, bool on) {
   char topic[64];
   snprintf(topic, sizeof(topic), "greenhouse/zone%d/state", zone + 1);
   mqtt.publish(topic, on ? "ON" : "OFF");
+  if (lcdPage == 1) lcdRenderPage();  // refresh zone status on LCD
 }
 
 // ── Climate ────────────────────────────────────────────────
@@ -442,6 +556,12 @@ void setup() {
   Serial.begin(115200);
   delay(50);
 
+  // LCD
+  Wire.begin(LCD_SDA, LCD_SCL);
+  lcd.init();
+  lcd.backlight();
+  lcdShowBoot();
+
   for (int i = 0; i < 3; i++) {
     pinMode(zonePins[i], OUTPUT);
     digitalWrite(zonePins[i], RELAY_OFF);
@@ -490,6 +610,9 @@ void loop() {
     tickIrrigationTimers(delta);
   }
 
+  // ── LCD update (non-blocking) ──
+  updateLcd(now);
+
   // ── Sensor publish (only when MQTT connected) ──
   if (mqtt.connected() && now - lastSensorPublish > SENSOR_INTERVAL_MS) {
     lastSensorPublish = now;
@@ -498,6 +621,12 @@ void loop() {
     float humIn   = dhtIn.readHumidity();
     float tempOut = dhtOut.readTemperature();
     float humOut  = dhtOut.readHumidity();
+
+    // Cache for LCD display
+    lcdTempIn  = tempIn;
+    lcdHumIn   = humIn;
+    lcdTempOut = tempOut;
+    lcdHumOut  = humOut;
 
     char buf[16];
     if (!isnan(tempIn))  { dtostrf(tempIn, 4, 1, buf); mqtt.publish("greenhouse/sensor/inside/temperature", buf); }

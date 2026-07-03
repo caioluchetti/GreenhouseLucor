@@ -29,14 +29,15 @@ Painel de controle completo de estufa com visual Solarpunk. Controla irrigação
                                      │  Mosquitto :1883 (MQTT Broker)   │
                                      └──────────────┬───────────────────┘
                                                     │ MQTT (Wi-Fi)
-                                     ┌──────────────▼───────────────────┐
-                                     │  ESP32 DevKit (modo autônomo)    │
-                                     │  ├─ 3x Relé irrigação (zonas)   │
-                                     │  ├─ 1x Relé exaustor (clima)    │
-                                     │  ├─ 1x Relé grow light (luz)    │
-                                     │  ├─ DHT22 — temp/umid DENTRO    │
-                                     │  └─ DHT11 — temp/umid FORA      │
-                                     └──────────────────────────────────┘
+                                      ┌──────────────▼───────────────────┐
+                                      │  ESP32 DevKit (modo autônomo)    │
+                                      │  ├─ 3x Relé irrigação (zonas)   │
+                                      │  ├─ 1x Relé exaustor (clima)    │
+                                      │  ├─ 1x Relé grow light (luz)    │
+                                      │  ├─ DHT22 — temp/umid DENTRO    │
+                                      │  ├─ DHT11 — temp/umid FORA      │
+                                      │  └─ LCD 16x2 I2C — display local│
+                                      └──────────────────────────────────┘
 ```
 
 O backend roda em **modo mock** (sensores simulados, sem hardware) para desenvolvimento, ou **modo real** conectando ao broker MQTT + ESP32.
@@ -50,11 +51,11 @@ O backend roda em **modo mock** (sensores simulados, sem hardware) para desenvol
 | Componente | Qtd | Finalidade |
 |---|---|---|
 | **ESP32 DevKit** (30 pinos) | 1 | Microcontrolador Wi-Fi — cérebro da estufa |
-| **Módulo Relé 5V 4 canais** | 1 | Acionar bombas/válvulas (3 zonas de irrigação) |
-| **Módulo Relé 5V 2 canais** | 1 | Exaustor + Grow Light |
+| **Módulo Relé 5V 8 canais** | 1 | Acionar bombas/válvulas (3 zonas), exaustor, grow light (5 dos 8 canais usados; 3 sobressalentes) |
 | **DHT22** | 1 | Temperatura + umidade dentro da estufa |
 | **DHT11** (pode ser antigo) | 1 | Temperatura + umidade fora da estufa |
-| **Fonte chaveada 5V 3A** | 1 | Alimentar ESP32 + relés + sensores |
+| **LCD 16x2 I2C** (PCF8574, addr 0x27) | 1 | Display local: sensores, zonas, status de conectividade |
+| **Fonte chaveada 5V 3A** | 1 | Alimentar ESP32 + relés + sensores + LCD |
 | **Fonte chaveada 12V** (opcional) | 1 | Válvulas solenoides / bombas (se usar 12V) |
 | **Resistor 2.2KΩ** (1/4W) | 1 | Pull-up do DHT11 externo (cabo longo) |
 | **Jumpers, protoboard, fios** | - | Conexões |
@@ -72,13 +73,17 @@ GPIO 26  ───────────────────►   IN1 — 
 GPIO 27  ───────────────────►   IN2 — Relé Zona 2 (irrigação)
 GPIO 14  ───────────────────►   IN3 — Relé Zona 3 (irrigação)
 GPIO 25  ───────────────────►   IN4 — Relé Exaustor (clima)
-GPIO 33  ───────────────────►   IN1 — Relé Grow Light (2º módulo)
+GPIO 33  ───────────────────►   IN5 — Relé Grow Light
+                                 (IN6-IN8 = sobressalentes, não ligados)
 
 GPIO 15  ───────────────────►   DHT22 DATA (dentro, cabo curto)
 GPIO 4   ───────────────────►   DHT11 DATA (fora, cabo ~15m)
 
-VIN (5V) ───────────────────►   VCC de TODOS os relés + DHT22/11
-GND      ───────────────────►   GND de TODOS os relés + DHT22/11
+GPIO 21  ───────────────────►   LCD I2C SDA
+GPIO 22  ───────────────────►   LCD I2C SCL
+
+VIN (5V) ───────────────────►   VCC de TODOS os relés + DHT22/11 + LCD
+GND      ───────────────────►   GND de TODOS os relés + DHT22/11 + LCD
 
            ┌── resistor 2.2KΩ ──┐
 GPIO 4 ────┤                    ├─── VCC (3.3V ou 5V)
@@ -95,18 +100,21 @@ GPIO 4 ────┤                    ├─── VCC (3.3V ou 5V)
    Fonte 5V 3A ────┤ GND                                      │
                     │                                          │
    GPIO26 ─────────┤─────────── IN1 ┐                          │
-   GPIO27 ─────────┤─────────── IN2 │ Módulo Relé 4ch          │
-   GPIO14 ─────────┤─────────── IN3 │ (Irrigação)              │
-   GPIO25 ─────────┤───────┐   IN4 ┘                          │
-                    │       │                                   │
-   GPIO33 ─────────┤───┐   │   ┌── IN1 ─── Grow Light         │
-                    │   │   └───┤  Módulo Relé 2ch              │
-   GPIO15 ─────────┤───┼───────┼── DHT22 DATA (dentro)         │
-                    │   │       │  VCC ─── 5V                  │
-   GPIO4  ─────────┤───┼───────┼── 2.2KΩ ─── 5V               │
-                    │   │       └── DHT11 DATA (fora, 15m)     │
-                    │   │                                       │
-   GND ────────────┴───┴─────── GND comum (todos módulos)      │
+   GPIO27 ─────────┤─────────── IN2 │                          │
+   GPIO14 ─────────┤─────────── IN3 │ Módulo Relé 8ch          │
+   GPIO25 ─────────┤─────────── IN4 │ (5 canais usados)        │
+   GPIO33 ─────────┤─────────── IN5 │ (3 sobressalentes)       │
+                    │               │                          │
+   GPIO15 ─────────┤─── DHT22 DATA (dentro)                    │
+                    │    VCC ─── 5V                             │
+   GPIO4  ─────────┤─── 2.2KΩ ─── 5V                           │
+                    │    └── DHT11 DATA (fora, 15m)            │
+                    │                                          │
+   GPIO21 ─────────┤─── LCD I2C SDA                            │
+   GPIO22 ─────────┤─── LCD I2C SCL                            │
+                    │    VCC ─── 5V, GND ─── GND               │
+                    │                                          │
+   GND ────────────┴──── GND comum (todos módulos)            │
                     └─────────────────────────────────────────┘
 
    POTÊNCIA (lado de alta dos relés):
@@ -119,10 +127,10 @@ GPIO 4 ────┤                    ├─── VCC (3.3V ou 5V)
 ```
 Fonte Chaveada 5V 3A (PRINCIPAL)
 ├── ESP32 VIN + GND
-├── Relé 4ch VCC + GND
-├── Relé 2ch VCC + GND
+├── Relé 8ch VCC + GND
 ├── DHT22 VCC + GND
-└── DHT11 VCC + GND (via cabo longo)
+├── DHT11 VCC + GND (via cabo longo)
+└── LCD I2C VCC + GND
 
 Fonte Chaveada 12V (separada, opcional)
 └── COM/NO dos relés para bombas e válvulas
@@ -131,7 +139,7 @@ Fonte Chaveada 12V (separada, opcional)
 ⚠️  O GND da fonte 5V e da fonte 12V devem ser COMUNS (conectados entre si).
 ⚠️  Se seus relés forem active-LOW, verifique o #define RELAY_ON no firmware.
 ⚠️  A fonte 5V 3A é suficiente para ESP32 (~300mA) + 5 relés (~75mA cada) +
-    DHT22 (~2mA) + DHT11 (~2mA) = sobra mais de 2A de folga.
+    DHT22 (~2mA) + DHT11 (~2mA) + LCD I2C (~25mA) = sobra mais de 2A de folga.
 ```
 
 ---
@@ -227,6 +235,7 @@ O firmware completo está em `esp32-firmware/greenhouse_lucor_esp32.ino`.
 | **PubSubClient** (Nick O'Leary) | MQTT |
 | **DHT sensor library** (Adafruit) | Leitura DHT22/DHT11 |
 | **ArduinoJson** (Benoit Blanchon) | Parse JSON (thresholds, schedules) |
+| **LiquidCrystal_I2C** (frank de brabander) | LCD 16x2 via PCF8574 I2C backpack |
 | **Preferences** (built-in) | Armazenamento NVS |
 | **WiFi** (built-in) | Conexão Wi-Fi |
 | **time.h** (built-in) | NTP |
@@ -583,6 +592,7 @@ sudo nginx -t && sudo systemctl reload nginx
    - PubSubClient (Nick O'Leary)
    - DHT sensor library (Adafruit)
    - ArduinoJson (Benoit Blanchon)
+   - LiquidCrystal_I2C (frank de brabander)
 5. Board: `esp32dev`, Flash: 4MB
 6. Conecte o ESP32 via USB, selecione a porta, clique Upload
 7. Serial Monitor (115200 baud) — deve mostrar:

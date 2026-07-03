@@ -14,7 +14,7 @@ Browser (React SPA) ←HTTP→ Nginx :8085 ←proxy /api/*→ FastAPI :6001 (Doc
 
 - **Frontend**: React 19 + Vite 8 + Tailwind CSS v4 (JSX, sem TypeScript) — raiz do repo
 - **Backend**: Python 3.12 + FastAPI + SQLite + MQTT — diretório `api/`
-- **Hardware**: ESP32 DevKit com 5 relés, DHT22 (dentro), DHT11 (fora)
+- **Hardware**: ESP32 DevKit com 5 relés (módulo 8ch), DHT22 (dentro), DHT11 (fora), LCD 16x2 I2C
 - **Comunicação**: Frontend↔Backend via HTTP REST, Backend↔ESP32 via MQTT
 - **Design system**: Solarpunk/glassmorphism definido por CSS variables em `src/index.css`
 
@@ -166,6 +166,7 @@ Key: "s0_en"       → bool
 - **PubSubClient** (Nick O'Leary) — MQTT
 - **DHT sensor library** (Adafruit) — DHT22/DHT11
 - **ArduinoJson** (Benoit Blanchon) — parse JSON
+- **LiquidCrystal_I2C** (frank de brabander) — LCD 16x2 via I2C
 - **Preferences** (built-in) — NVS
 - **WiFi** (built-in)
 - **time.h** (built-in) — NTP
@@ -241,7 +242,8 @@ Este projeto usa Tailwind v4 com plugin `@tailwindcss/vite`. **Não existe** `ta
 ### ESP32
 
 - **Relés active-LOW**: `#define RELAY_ON LOW`, `#define RELAY_OFF HIGH`
-- **Pinos GPIO**: 26, 27, 14 = irrigação / 25 = exaustor / 33 = luz / 15 = DHT22 / 4 = DHT11
+- **Pinos GPIO**: 26, 27, 14 = irrigação / 25 = exaustor / 33 = luz / 15 = DHT22 / 4 = DHT11 / 21 = LCD SDA / 22 = LCD SCL
+- **LCD I2C**: 16x2, address 0x27, 3 páginas rotativas (sensores, zonas, conectividade), refresh a cada 500ms, troca de página a cada 3s
 - **MQTT buffer**: 4096 bytes (para receber array JSON de schedules)
 - **NVS namespaces**: `"climate"`, `"schedules"` (não colidir)
 
