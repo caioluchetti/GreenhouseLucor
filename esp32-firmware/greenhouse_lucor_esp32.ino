@@ -61,7 +61,7 @@ const char* MQTT_CLIENT   = "esp32-greenhouse";
 // Para desabilitar verificação de certificado, deixe string vazia "".  O
 // firmware usará setInsecure() nesse caso.  Prefira preencher com o fingerprint
 // real quando disponível.
-const char* MQTT_TLS_FINGERPRINT = "36:12:05:B8:85:08:C1:9B:A0:F0:FA:6B:CC:C2:F2:8B:79:56:23:E7";
+const char* MQTT_TLS_FINGERPRINT = "55:3C:48:09:40:6C:C9:04:59:68:F0:C4:C4:CD:D9:96:23:E6:F7:74";
 
 // ── Pinos ─────────────────────────────────────────────────
 #define DHTPIN       15
