@@ -474,11 +474,11 @@ async def camera_live():
             if frame:
                 sent = True
                 yield (b"--frame\r\n"
-                       b"Content-Type: image/jpeg\r\n" +
-                       f"Content-Length: {len(frame)}\r\n\r\n".encode() + frame + b"\r\n")
+                    b"Content-Type: image/jpeg\r\n" +
+                    f"Content-Length: {len(frame)}\r\n\r\n".encode() + frame + b"\r\n")
             elif not sent:
                 yield b"--frame\r\nContent-Type: text/plain\r\nContent-Length: 7\r\n\r\nWaiting\r\n"
-            time.sleep(0.2)
+            time.sleep(0.1)   # was 0.2 — now matches ~10fps
     return StreamingResponse(
         frame_generator(),
         media_type="multipart/x-mixed-replace; boundary=frame",
@@ -487,41 +487,44 @@ async def camera_live():
 
 FIRMWARE_DIR = os.path.join(os.path.dirname(__file__), "data", "firmware")
 os.makedirs(FIRMWARE_DIR, exist_ok=True)
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://greenhouse.cortada-server.ddns.net")
+
+OTA_TOPICS = {
+    "greenhouse": "greenhouse/ota/update",
+    "camera": "greenhouse/camera/ota/update",
+}
 
 @app.post("/api/firmware/upload", response_model=FirmwareUploadResponse)
-async def upload_firmware(version: str, file: UploadFile = File(...)):
+async def upload_firmware(version: str, device: str = "greenhouse", file: UploadFile = File(...)):
+    if device not in OTA_TOPICS:
+        raise HTTPException(status_code=400, detail="device inválido (greenhouse|camera)")
     if not file.filename.endswith(".bin"):
         raise HTTPException(status_code=400, detail="Arquivo deve ser .bin")
-    filename = f"tatufa_v{version}.bin"
+    filename = f"{device}_v{version}.bin"   # prefix avoids overwriting the other device's binary
     filepath = os.path.join(FIRMWARE_DIR, filename)
     with open(filepath, "wb") as f:
         shutil.copyfileobj(file.file, f)
     return FirmwareUploadResponse(status="uploaded", filename=filename, version=version)
 
 
-PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://greenhouse.cortada-server.ddns.net")
-
 @app.post("/api/firmware/deploy", response_model=FirmwareDeployResponse)
-async def deploy_firmware(filename: str, version: str):
+async def deploy_firmware(filename: str, version: str, device: str = "greenhouse"):
+    if device not in OTA_TOPICS:
+        raise HTTPException(status_code=400, detail="device inválido (greenhouse|camera)")
     filepath = os.path.join(FIRMWARE_DIR, filename)
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="Firmware não encontrado")
     fw_url = f"{PUBLIC_BASE_URL}/api/firmware/download/{filename}"
-    mqtt.publish("greenhouse/ota/update", json.dumps({"url": fw_url, "version": version}))
+    mqtt.publish(OTA_TOPICS[device], json.dumps({"url": fw_url, "version": version}))
     return FirmwareDeployResponse(status="ok", url=fw_url, version=version)
-
-@app.get("/api/firmware/download/{filename}")
-async def download_firmware(filename: str):
-    filepath = os.path.join(FIRMWARE_DIR, filename)
-    if not os.path.exists(filepath):
-        raise HTTPException(status_code=404, detail="Not found")
-    return FileResponse(filepath, media_type="application/octet-stream")
 
 
 @app.get("/api/firmware/status", response_model=FirmwareStatusResponse)
-async def firmware_status():
-    ota = mqtt.get_ota_status()
-    ver = mqtt.get_firmware_version()
+async def firmware_status(device: str = "greenhouse"):
+    if device not in OTA_TOPICS:
+        raise HTTPException(status_code=400, detail="device inválido (greenhouse|camera)")
+    ota = mqtt.get_ota_status(device)
+    ver = mqtt.get_firmware_version(device)
     return FirmwareStatusResponse(
         status=ota.get("status", "idle"),
         reason=ota.get("reason"),
@@ -529,7 +532,6 @@ async def firmware_status():
         rebooting=ota.get("rebooting"),
         current_version=ver.get("version"),
     )
-
 
 @app.get("/api/firmware/list")
 async def list_firmware():

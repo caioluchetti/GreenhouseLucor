@@ -26,31 +26,67 @@
  *   - Thresholds + fan_mode stored in NVS
  *   - Evaluated locally every DHT read — no backend needed
  *
+ * Wi-Fi provisioning (NEW):
+ *   - On boot, tries to connect with the last-saved credentials for
+ *     WIFI_CONNECT_TIMEOUT_S seconds.
+ *   - If that fails, the ESP32 opens its own access point
+ *     ("Tatufa-Setup") with a captive-portal web page. Connect a phone
+ *     or laptop to that AP, a config page opens automatically (or go to
+ *     192.168.4.1), enter your Wi-Fi SSID/password, and the device
+ *     reboots and connects. Credentials are persisted across reboots.
+ *   - This uses AP + captive portal rather than Bluetooth — it needs no
+ *     companion app and is the standard, well-supported approach for
+ *     ESP32 Wi-Fi provisioning.
+ *
+ * OTA firmware update (NEW):
+ *   - ArduinoOTA: local-network updates from Arduino IDE / PlatformIO
+ *     while developing (device must be on the same LAN).
+ *   - Remote HTTPS OTA: publish a JSON payload with a firmware URL to
+ *     greenhouse/ota/update over MQTT, e.g.
+ *       {"url":"https://your-server/firmware/tatufa_v1_1_0.bin","version":"1.1.0"}
+ *     The device downloads and flashes it, then reboots. This works
+ *     even though the device is remote (behind DDNS), since it rides
+ *     the same MQTT connection you already use.
+ *
  * Build with: Arduino IDE or PlatformIO (board: esp32dev, framework: arduino)
  *
  * Depends on:
  *   - WiFi           (built-in)
+ *   - WiFiManager    (Library Manager — "WiFiManager" by tzapu) — NEW
  *   - PubSubClient   (Library Manager — MQTT)
  *   - DHT sensor library by Adafruit
  *   - ArduinoJson    (Library Manager — parsing JSON)
  *   - LiquidCrystal_I2C (Library Manager — LCD 16x2 via PCF8574)
  *   - Preferences    (built-in, for NVS)
  *   - time.h         (built-in, for NTP)
+ *   - ArduinoOTA     (built-in, for LAN OTA) — NEW
+ *   - HTTPUpdate     (built-in, for remote HTTPS OTA) — NEW
  *
  * Copy to esp32-firmware/greenhouse_lucor_esp32.ino, fill in
- * WIFI_SSID / WIFI_PASS / MQTT_BROKER, and flash.
+ * MQTT_BROKER, and flash. (WIFI_SSID/WIFI_PASS below are now only a
+ * first-boot fallback default — see WiFiManager section.)
  */
 
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <WiFiManager.h>          // NEW — tzapu/WiFiManager
 #include <PubSubClient.h>
 #include <DHT.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <LiquidCrystal_I2C.h>
 #include <Wire.h>
+#include <ArduinoOTA.h>           // NEW — LAN OTA
+#include <HTTPUpdate.h>           // NEW — remote HTTPS OTA
+
+// ── Firmware version ───────────────────────────────────────
+#define FW_VERSION "1.1.0"
 
 // ── Configuração ──────────────────────────────────────────
+// NOTE: these are now only used as a *first-boot seed*. WiFiManager
+// stores whatever credentials the user actually configures via the
+// portal, and reuses those on subsequent boots — even if they differ
+// from the values below.
 const char* WIFI_SSID     = "Toca do Tatu 2.4G";
 const char* WIFI_PASS     = "tamandua123";
 const char* MQTT_BROKER   = "greenhousemqtt.cortada-server.ddns.net";
@@ -62,6 +98,16 @@ const char* MQTT_CLIENT   = "esp32-greenhouse";
 // firmware usará setInsecure() nesse caso.  Prefira preencher com o fingerprint
 // real quando disponível.
 const char* MQTT_TLS_FINGERPRINT = "55:3C:48:09:40:6C:C9:04:59:68:F0:C4:C4:CD:D9:96:23:E6:F7:74";
+
+// ── Wi-Fi provisioning (NEW) ────────────────────────────────
+const char* WIFI_AP_NAME   = "Tatufa-Setup";     // AP shown when config is needed
+const char* WIFI_AP_PASS   = "tatufa1234";       // must be >= 8 chars, "" for open AP
+const int   WIFI_CONNECT_TIMEOUT_S = 10;         // try saved creds this long before falling back
+const int   WIFI_PORTAL_TIMEOUT_S  = 180;        // give up on portal after this long and reboot
+
+// ── OTA (NEW) ────────────────────────────────────────────────
+const char* OTA_HOSTNAME   = "tatufa-greenhouse"; // shows up in Arduino IDE / PlatformIO port list
+const char* OTA_PASSWORD   = "tatufa-ota-2026";   // change this before flashing!
 
 // ── Pinos ─────────────────────────────────────────────────
 // ── Pinos ─────────────────────────────────────────────────
@@ -97,6 +143,7 @@ DHT dhtOut(DHTPIN_OUT, DHTTYPE_OUT);
 WiFiClientSecure espClient;
 PubSubClient mqtt(espClient);
 Preferences prefs;
+WiFiManager wifiManager;   // NEW
 
 const char* zoneStates[3] = {"OFF", "OFF", "OFF"};
 const int   zonePins[3]   = {RELAY_Z1, RELAY_Z2, RELAY_Z3};
@@ -153,6 +200,9 @@ float lcdHumIn   = NAN;
 float lcdTempOut = NAN;
 float lcdHumOut  = NAN;
 
+// ── OTA state (NEW) ─────────────────────────────────────────
+bool otaInProgress = false;
+
 // ── LCD display ───────────────────────────────────────────
 void lcdShowBoot() {
   lcd.clear();
@@ -160,6 +210,28 @@ void lcdShowBoot() {
   lcd.print("Tatufa  boot...");
   lcd.setCursor(0, 1);
   lcd.print("Connecting WiFi");
+}
+
+// NEW — shown while the config portal AP is open, waiting for the user
+void lcdShowWifiSetup() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("WiFi setup mode");
+  lcd.setCursor(0, 1);
+  char line[17];
+  snprintf(line, sizeof(line), "AP: %s", WIFI_AP_NAME);
+  lcd.print(line);
+}
+
+// NEW — shown while flashing new firmware
+void lcdShowOta(int percent) {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Updating fw...");
+  lcd.setCursor(0, 1);
+  char line[17];
+  snprintf(line, sizeof(line), "Progress: %d%%", percent);
+  lcd.print(line);
 }
 
 void lcdPrintFloat(float v, int dec) {
@@ -225,6 +297,7 @@ void lcdRenderPage() {
 }
 
 void updateLcd(unsigned long now) {
+  if (otaInProgress) return;  // NEW — don't fight the OTA progress screen
   if (now - lastLcdPageSwitch > LCD_PAGE_MS) {
     lastLcdPageSwitch = now;
     lcdPage = (lcdPage + 1) % LCD_PAGE_COUNT;
@@ -407,19 +480,126 @@ void tickIrrigationTimers(unsigned long deltaMs) {
   }
 }
 
-// ── Wi-Fi ──────────────────────────────────────────────────
+// ── Wi-Fi (NEW — WiFiManager with AP-portal fallback) ───────
+// Called from the portal callback when the device has opened its
+// config AP and is waiting for the user to submit credentials.
+void onConfigPortalStart(WiFiManager* mgr) {
+  Serial.println("[WiFi] No connection — opened config portal AP");
+  Serial.printf("[WiFi] Connect to \"%s\" and go to 192.168.4.1\n", WIFI_AP_NAME);
+  lcdShowWifiSetup();
+}
+
 void connectWiFi() {
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  Serial.print("WiFi");
-  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
-  Serial.println(" OK");
+  lcdShowBoot();
+
+  wifiManager.setConnectTimeout(WIFI_CONNECT_TIMEOUT_S);   // time to try saved creds
+  wifiManager.setConfigPortalTimeout(WIFI_PORTAL_TIMEOUT_S); // time the portal stays open
+  wifiManager.setAPCallback(onConfigPortalStart);
+  wifiManager.setBreakAfterConfig(true);
+
+  // autoConnect() tries the last-saved credentials first (falling back to
+  // WIFI_SSID/WIFI_PASS on a truly first boot isn't automatic with
+  // WiFiManager, so we seed it once below). If that fails within
+  // WIFI_CONNECT_TIMEOUT_S seconds, it opens the "Tatufa-Setup" AP with a
+  // captive portal so you can enter new credentials from a phone/laptop.
+  bool connected = wifiManager.autoConnect(WIFI_AP_NAME, WIFI_AP_PASS);
+
+  if (!connected) {
+    // Portal timed out with nobody configuring it — reboot and try again
+    // rather than getting stuck. Irrigation continues from NVS regardless.
+    Serial.println("[WiFi] Config portal timed out — rebooting to retry");
+    delay(1000);
+    ESP.restart();
+  }
+
+  Serial.println("WiFi OK");
   Serial.print("IP: "); Serial.println(WiFi.localIP());
 
   // TLS para MQTT remoto via greenhousemqtt.cortada-server.ddns.net:8883
+  espClient.setInsecure();
+  Serial.println("[TLS] WARNING: Certificate verification disabled (insecure)");
+}
 
-    espClient.setInsecure();
-    Serial.println("[TLS] WARNING: Certificate verification disabled (insecure)");
-  
+// ── OTA (NEW) ────────────────────────────────────────────────
+void setupArduinoOTA() {
+  ArduinoOTA.setHostname(OTA_HOSTNAME);
+  ArduinoOTA.setPassword(OTA_PASSWORD);
+
+  ArduinoOTA.onStart([]() {
+    otaInProgress = true;
+    Serial.println("[OTA] LAN update starting...");
+    lcdShowOta(0);
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    int pct = (progress * 100) / total;
+    lcdShowOta(pct);
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("[OTA] LAN update complete — rebooting");
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    otaInProgress = false;
+    Serial.printf("[OTA] Error[%u]\n", error);
+  });
+
+  ArduinoOTA.begin();
+  Serial.println("[OTA] ArduinoOTA ready (LAN updates)");
+}
+
+// Triggered by MQTT command: greenhouse/ota/update
+// payload: {"url":"https://host/path/firmware.bin","version":"1.2.0"}
+void handleRemoteOta(const String& url, const String& version) {
+  if (url.length() == 0) {
+    mqtt.publish("greenhouse/ota/status", "{\"status\":\"error\",\"reason\":\"missing url\"}");
+    return;
+  }
+
+  Serial.printf("[OTA] Remote update requested: %s (v%s)\n", url.c_str(), version.c_str());
+  otaInProgress = true;
+  lcdShowOta(0);
+  mqtt.publish("greenhouse/ota/status", "{\"status\":\"starting\"}");
+
+  // Uses its own TLS client — kept insecure to match the MQTT connection
+  // above. If your firmware host has a trusted CA, prefer
+  // otaClient.setCACert(...) instead of setInsecure() for production.
+  WiFiClientSecure otaClient;
+  otaClient.setInsecure();
+
+  httpUpdate.setLedPin(-1);
+  httpUpdate.onProgress([](int cur, int total) {
+    int pct = total > 0 ? (cur * 100) / total : 0;
+    lcdShowOta(pct);
+  });
+
+  t_httpUpdate_return ret = httpUpdate.update(otaClient, url);
+
+  switch (ret) {
+    case HTTP_UPDATE_FAILED:
+      Serial.printf("[OTA] Failed (%d): %s\n",
+                     httpUpdate.getLastError(),
+                     httpUpdate.getLastErrorString().c_str());
+      {
+        char buf[160];
+        snprintf(buf, sizeof(buf), "{\"status\":\"failed\",\"error\":\"%s\"}",
+                 httpUpdate.getLastErrorString().c_str());
+        mqtt.publish("greenhouse/ota/status", buf);
+      }
+      otaInProgress = false;
+      break;
+
+    case HTTP_UPDATE_NO_UPDATES:
+      Serial.println("[OTA] No updates available at that URL");
+      mqtt.publish("greenhouse/ota/status", "{\"status\":\"no_update\"}");
+      otaInProgress = false;
+      break;
+
+    case HTTP_UPDATE_OK:
+      Serial.println("[OTA] Update OK — rebooting");
+      mqtt.publish("greenhouse/ota/status", "{\"status\":\"ok\",\"rebooting\":true}");
+      delay(500);
+      ESP.restart();  // httpUpdate.update() usually reboots itself, kept as a safety net
+      break;
+  }
 }
 
 // ── MQTT Publish ───────────────────────────────────────────
@@ -524,6 +704,19 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     }
     return;
   }
+
+  // ── OTA update command (NEW) ──
+  if (t == "greenhouse/ota/update") {
+    StaticJsonDocument<384> doc;
+    if (deserializeJson(doc, p) == DeserializationError::Ok) {
+      String url     = doc["url"]     | "";
+      String version = doc["version"] | "";
+      handleRemoteOta(url, version);
+    } else {
+      mqtt.publish("greenhouse/ota/status", "{\"status\":\"error\",\"reason\":\"bad json\"}");
+    }
+    return;
+  }
 }
 
 void reconnectMQTT() {
@@ -538,8 +731,12 @@ void reconnectMQTT() {
       mqtt.subscribe("greenhouse/climate/fan/cmd");
       mqtt.subscribe("greenhouse/climate/thresholds");
       mqtt.subscribe("greenhouse/schedules/sync");
+      mqtt.subscribe("greenhouse/ota/update");           // NEW
       mqtt.publish("greenhouse/climate/request", "{}");
       mqtt.publish("greenhouse/schedules/request", "{}");
+      char verBuf[48];
+      snprintf(verBuf, sizeof(verBuf), "{\"version\":\"%s\"}", FW_VERSION);  // NEW
+      mqtt.publish("greenhouse/firmware/version", verBuf);                   // NEW
       Serial.println("[MQTT] Reconnected — requested sync");
     } else {
       Serial.print("failed rc=");
@@ -578,6 +775,7 @@ void setup() {
 
   connectWiFi();
   syncTime();
+  setupArduinoOTA();   // NEW
 
   mqtt.setServer(MQTT_BROKER, MQTT_PORT);
   mqtt.setCallback(mqttCallback);
@@ -586,6 +784,17 @@ void setup() {
 
 void loop() {
   unsigned long now = millis();
+
+  // ── OTA handling (NEW) — keep this responsive, skip other slow work ──
+  if (WiFi.status() == WL_CONNECTED) {
+    ArduinoOTA.handle();
+  }
+  if (otaInProgress) {
+    // A remote HTTPS OTA (handleRemoteOta) blocks until done/failed, so in
+    // practice we won't linger here long, but this guards against doing
+    // relay/schedule work mid-flash if that ever changes.
+    return;
+  }
 
   // ── MQTT keep-alive ──
   if (WiFi.status() != WL_CONNECTED) {

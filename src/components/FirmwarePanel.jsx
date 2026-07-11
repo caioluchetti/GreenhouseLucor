@@ -16,10 +16,10 @@ export default function FirmwarePanel({ api }) {
   const [otaStatus, setOtaStatus] = useState(null)
   const [files, setFiles] = useState([])
   const pollRef = useRef(null)
-
+  const [device, setDevice] = useState('greenhouse')
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch(`${api}/firmware/status`)
+        const res = await fetch(`${api}/firmware/status?device=${device}`)
       if (res.ok) {
         const data = await res.json()
         setOtaStatus(data)
@@ -64,6 +64,9 @@ export default function FirmwarePanel({ api }) {
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [])
 
+
+
+  
   const handleUpload = async () => {
     if (!file || !version) return
     setUploading(true)
@@ -71,10 +74,8 @@ export default function FirmwarePanel({ api }) {
     try {
       const form = new FormData()
       form.append('file', file)
-      const uploadRes = await fetch(`${api}/firmware/upload?version=${encodeURIComponent(version)}`, {
-        method: 'POST',
-        body: form,
-      })
+      const uploadRes = await fetch(`${api}/firmware/upload?version=${encodeURIComponent(version)}&device=${device}`, 
+      { method: 'POST', body: form })
       if (!uploadRes.ok) {
         setMessage({ type: 'error', text: 'Falha no envio do arquivo' })
         return
@@ -94,9 +95,8 @@ export default function FirmwarePanel({ api }) {
 
   const deploy = async (filename, ver) => {
     try {
-      const res = await fetch(`${api}/firmware/deploy?filename=${encodeURIComponent(filename)}&version=${encodeURIComponent(ver)}`, {
-        method: 'POST',
-      })
+        const res = await fetch(`${api}/firmware/deploy?filename=${encodeURIComponent(filename)}&version=${encodeURIComponent(ver)}&device=${device}`,
+         { method: 'POST' })
       if (res.ok) {
         setMessage({ type: 'ok', text: `Atualização para v${ver} enviada ao dispositivo` })
         startPolling()
@@ -123,6 +123,10 @@ export default function FirmwarePanel({ api }) {
         <h3 className="font-medium mb-3">Enviar novo firmware</h3>
 
         <div className="flex flex-col gap-2 max-w-sm">
+          <select value={device} onChange={e => setDevice(e.target.value)} className="border rounded p-2 mb-2 w-full bg-transparent" disabled={uploading || isBusy}>
+            <option value="greenhouse">Placa principal (Tatufa)</option>
+            <option value="camera">Câmera (ESP32-CAM)</option>
+          </select>
           <input
             type="text"
             placeholder="Versão (ex: 1.2.0)"

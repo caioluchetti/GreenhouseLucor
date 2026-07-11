@@ -147,8 +147,8 @@ class RealMQTT:
             "inside_temperature": "--", "inside_humidity": "--",
             "outside_temperature": "--", "outside_humidity": "--",
         }
-        self._ota_status = {"status": "idle"}
-        self._firmware_version = {"version": "unknown"} 
+        self._ota_status = {"greenhouse": {"status": "idle"}, "camera": {"status": "idle"}}
+        self._firmware_version = {"greenhouse": {"version": "unknown"}, "camera": {"version": "unknown"}}
         self._climate_status = {"fan": "off", "mode": "auto", "reason": "", "temp": "--", "hum": "--"}
         self._light_state = "off"
         self._last_heartbeat = 0
@@ -172,6 +172,8 @@ class RealMQTT:
         client.subscribe("greenhouse/camera/fixed/frame")
         client.subscribe("greenhouse/ota/status")
         client.subscribe("greenhouse/firmware/version")
+        client.subscribe("greenhouse/camera/ota/status")
+        client.subscribe("greenhouse/camera/firmware/version")
 
     def _on_message(self, client, userdata, msg):
         topic = msg.topic
@@ -216,16 +218,17 @@ class RealMQTT:
             except Exception:
                 pass
         elif topic == "greenhouse/ota/status":
-            try:
-                self._ota_status = json.loads(payload)
-            except Exception:
-                pass
+            try: self._ota_status["greenhouse"] = json.loads(payload)
+            except Exception: pass
+        elif topic == "greenhouse/camera/ota/status":
+            try: self._ota_status["camera"] = json.loads(payload)
+            except Exception: pass
         elif topic == "greenhouse/firmware/version":
-            try:
-                self._firmware_version = json.loads(payload)
-            except Exception:
-                pass    
-
+            try: self._firmware_version["greenhouse"] = json.loads(payload)
+            except Exception: pass
+        elif topic == "greenhouse/camera/firmware/version":
+            try: self._firmware_version["camera"] = json.loads(payload)
+            except Exception: pass
 
     def publish(self, topic: str, payload: str):
         self.client.publish(topic, payload)
@@ -251,11 +254,11 @@ class RealMQTT:
     def is_esp_online(self):
         return (time.time() - self._last_heartbeat) < 60
   
-    def get_ota_status(self):
-        return dict(self._ota_status)
+    def get_ota_status(self, device="greenhouse"):
+        return dict(self._ota_status.get(device, {"status": "idle"}))
 
-    def get_firmware_version(self):
-        return dict(self._firmware_version)
+    def get_firmware_version(self, device="greenhouse"):
+        return dict(self._firmware_version.get(device, {"version": "unknown"}))
 
     def stop(self):
         self.client.loop_stop()
