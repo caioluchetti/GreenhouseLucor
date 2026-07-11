@@ -225,6 +225,8 @@ class RealMQTT:
                 self._firmware_version = json.loads(payload)
             except Exception:
                 pass    
+
+            
     def publish(self, topic: str, payload: str):
         self.client.publish(topic, payload)
 

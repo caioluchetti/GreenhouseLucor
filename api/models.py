@@ -96,3 +96,21 @@ class CameraStatusResponse(BaseModel):
     ip: str = ""
     capture: str = ""
     stream: str = ""
+
+
+class FirmwareUploadResponse(BaseModel):
+    status: str
+    filename: str
+    version: str
+
+class FirmwareDeployResponse(BaseModel):
+    status: str
+    url: str
+    version: str
+
+class FirmwareStatusResponse(BaseModel):
+    status: str
+    reason: Optional[str] = None
+    error: Optional[str] = None
+    rebooting: Optional[bool] = None
+    current_version: Optional[str] = None
