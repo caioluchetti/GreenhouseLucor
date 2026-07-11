@@ -67,15 +67,15 @@ const char* MQTT_TLS_FINGERPRINT = "55:3C:48:09:40:6C:C9:04:59:68:F0:C4:C4:CD:D9
 // ── Pinos ─────────────────────────────────────────────────
 #define DHTPIN       32  // Inside DHT
 #define DHTPIN_OUT   33  // Outside DHT
-#define DHTTYPE_IN   DHT11
+#define DHTTYPE_IN   DHT22
 #define DHTTYPE_OUT  DHT11
 
-// Relays
-#define RELAY_Z1    26
-#define RELAY_Z2    18   // Moved from 27 (freed for LCD_SCL)
-#define RELAY_Z3    19   // Moved from 14 (freed for LCD_SDA)
-#define RELAY_FAN   25
-#define RELAY_LIGHT 15   // Moved from 33 (freed for DHTPIN_OUT)
+// Relays (Mapped to the right side of the ESP32)
+#define RELAY_Z1    19   // Zone 1 irrigation
+#define RELAY_Z2    18   // Zone 2 irrigation
+#define RELAY_Z3    5    // Zone 3 irrigation
+#define RELAY_FAN   17   // Exhaust fan
+#define RELAY_LIGHT 16   // Grow light (assigned to the next available right-side port)
 
 #define RELAY_ON    LOW
 #define RELAY_OFF   HIGH
