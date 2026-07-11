@@ -226,7 +226,7 @@ class RealMQTT:
             except Exception:
                 pass    
 
-            
+
     def publish(self, topic: str, payload: str):
         self.client.publish(topic, payload)
 
@@ -250,6 +250,12 @@ class RealMQTT:
 
     def is_esp_online(self):
         return (time.time() - self._last_heartbeat) < 60
+  
+    def get_ota_status(self):
+        return dict(self._ota_status)
+
+    def get_firmware_version(self):
+        return dict(self._firmware_version)
 
     def stop(self):
         self.client.loop_stop()
