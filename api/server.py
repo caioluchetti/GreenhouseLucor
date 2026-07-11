@@ -15,7 +15,9 @@ from models import (
     ScheduleCreate, ScheduleUpdate, ScheduleResponse,
     IrrigationStatus, ZoneNameUpdate, ZoneNameResponse,
     ClimateRuleUpdate, ClimateRuleResponse, ClimateStatus, LightState,
-    SensorHistoryPoint, SensorHistoryResponse, CameraStatusResponse
+    SensorHistoryPoint, SensorHistoryResponse, CameraStatusResponse,
+    FirmwareUploadResponse, FirmwareDeployResponse, FirmwareStatusResponse
+
 )
 from database import (
     SessionLocal, ScheduleRow, ZoneNameRow, ClimateRuleRow, LightStateRow, SensorHistoryRow, get_db
@@ -482,6 +484,58 @@ async def camera_live():
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
     )
+
+FIRMWARE_DIR = os.path.join(os.path.dirname(__file__), "data", "firmware")
+os.makedirs(FIRMWARE_DIR, exist_ok=True)
+
+@app.post("/api/firmware/upload", response_model=FirmwareUploadResponse)
+async def upload_firmware(version: str, file: UploadFile = File(...)):
+    if not file.filename.endswith(".bin"):
+        raise HTTPException(status_code=400, detail="Arquivo deve ser .bin")
+    filename = f"tatufa_v{version}.bin"
+    filepath = os.path.join(FIRMWARE_DIR, filename)
+    with open(filepath, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    return FirmwareUploadResponse(status="uploaded", filename=filename, version=version)
+
+
+@app.post("/api/firmware/deploy", response_model=FirmwareDeployResponse)
+async def deploy_firmware(filename: str, version: str, request: Request):
+    filepath = os.path.join(FIRMWARE_DIR, filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Firmware não encontrado")
+    base_url = str(request.base_url).rstrip("/")
+    fw_url = f"{base_url}/api/firmware/download/{filename}"
+    mqtt.publish("greenhouse/ota/update", json.dumps({"url": fw_url, "version": version}))
+    return FirmwareDeployResponse(status="ok", url=fw_url, version=version)
+
+
+@app.get("/api/firmware/download/{filename}")
+async def download_firmware(filename: str):
+    filepath = os.path.join(FIRMWARE_DIR, filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(filepath, media_type="application/octet-stream")
+
+
+@app.get("/api/firmware/status", response_model=FirmwareStatusResponse)
+async def firmware_status():
+    ota = mqtt.get_ota_status()
+    ver = mqtt.get_firmware_version()
+    return FirmwareStatusResponse(
+        status=ota.get("status", "idle"),
+        reason=ota.get("reason"),
+        error=ota.get("error"),
+        rebooting=ota.get("rebooting"),
+        current_version=ver.get("version"),
+    )
+
+
+@app.get("/api/firmware/list")
+async def list_firmware():
+    files = sorted(os.listdir(FIRMWARE_DIR)) if os.path.isdir(FIRMWARE_DIR) else []
+    return {"files": files}
+
 
 if __name__ == "__main__":
     import uvicorn

@@ -4,6 +4,7 @@ import SchedulesView from './components/ScheduleList.jsx'
 import ClimatePanel from './components/ClimatePanel.jsx'
 import SensorCharts from './components/SensorCharts.jsx'
 import StatusBar from './components/StatusBar.jsx'
+import FirmwarePanel from './components/FirmwarePanel.jsx'
 
 const API = import.meta.env.BASE_URL + 'api'
 
@@ -239,6 +240,7 @@ export default function App() {
     { key: 'schedules', label: 'Agendamentos', icon: '⏰' },
     { key: 'climate', label: 'Clima', icon: '🌡️' },
     { key: 'charts', label: 'Histórico', icon: '📊' },
+    { key: 'firmware', label: 'Firmware', icon: '🔧' },
   ]
 
   return (
@@ -298,6 +300,8 @@ export default function App() {
                 onPeriodChange={handlePeriodChange}
                 onClearHistory={handleClearHistory}
               />
+            ) : tab === 'firmware' ? (
+              <FirmwarePanel api={API} />
             ) : (
               <ClimatePanel
                 climateRules={climateRules}

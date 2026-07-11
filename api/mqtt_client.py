@@ -147,6 +147,8 @@ class RealMQTT:
             "inside_temperature": "--", "inside_humidity": "--",
             "outside_temperature": "--", "outside_humidity": "--",
         }
+        self._ota_status = {"status": "idle"}
+        self._firmware_version = {"version": "unknown"} 
         self._climate_status = {"fan": "off", "mode": "auto", "reason": "", "temp": "--", "hum": "--"}
         self._light_state = "off"
         self._last_heartbeat = 0
@@ -168,6 +170,8 @@ class RealMQTT:
         client.subscribe("greenhouse/light/status")
         client.subscribe("greenhouse/camera/fixed/status")
         client.subscribe("greenhouse/camera/fixed/frame")
+        client.subscribe("greenhouse/ota/status")
+        client.subscribe("greenhouse/firmware/version")
 
     def _on_message(self, client, userdata, msg):
         topic = msg.topic
@@ -211,7 +215,16 @@ class RealMQTT:
                 self._camera_status.update(data)
             except Exception:
                 pass
-
+        elif topic == "greenhouse/ota/status":
+            try:
+                self._ota_status = json.loads(payload)
+            except Exception:
+                pass
+        elif topic == "greenhouse/firmware/version":
+            try:
+                self._firmware_version = json.loads(payload)
+            except Exception:
+                pass    
     def publish(self, topic: str, payload: str):
         self.client.publish(topic, payload)
 
