@@ -12,6 +12,7 @@ services:
       - MQTT_MODE=${MQTT_MODE:-mock}
       - MQTT_BROKER=${MQTT_BROKER:-localhost}
       - MQTT_PORT=${MQTT_PORT:-1884}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://greenhouse.cortada-server.ddns.net}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6001/api/time').read()"]
       interval: 30s

@@ -499,16 +499,16 @@ async def upload_firmware(version: str, file: UploadFile = File(...)):
     return FirmwareUploadResponse(status="uploaded", filename=filename, version=version)
 
 
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://greenhouse.cortada-server.ddns.net")
+
 @app.post("/api/firmware/deploy", response_model=FirmwareDeployResponse)
-async def deploy_firmware(filename: str, version: str, request: Request):
+async def deploy_firmware(filename: str, version: str):
     filepath = os.path.join(FIRMWARE_DIR, filename)
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="Firmware não encontrado")
-    base_url = str(request.base_url).rstrip("/")
-    fw_url = f"{base_url}/api/firmware/download/{filename}"
+    fw_url = f"{PUBLIC_BASE_URL}/api/firmware/download/{filename}"
     mqtt.publish("greenhouse/ota/update", json.dumps({"url": fw_url, "version": version}))
     return FirmwareDeployResponse(status="ok", url=fw_url, version=version)
-
 
 @app.get("/api/firmware/download/{filename}")
 async def download_firmware(filename: str):
