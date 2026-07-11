@@ -518,6 +518,14 @@ async def deploy_firmware(filename: str, version: str, device: str = "greenhouse
     mqtt.publish(OTA_TOPICS[device], json.dumps({"url": fw_url, "version": version}))
     return FirmwareDeployResponse(status="ok", url=fw_url, version=version)
 
+@app.get("/api/firmware/download/{filename}")
+async def download_firmware(filename: str):
+    filepath = os.path.join(FIRMWARE_DIR, filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(filepath, media_type="application/octet-stream")
+
+
 
 @app.get("/api/firmware/status", response_model=FirmwareStatusResponse)
 async def firmware_status(device: str = "greenhouse"):

@@ -89,7 +89,7 @@ const char* OTA_PASSWORD  = "tatufa-ota-2026";  // change before deploying
 
 // ── Stream settings ───────────────────────────────────────
 #define STREAM_QUALITY 25       // JPEG quality 0-63 (25 = compact)
-#define FRAME_INTERVAL  100     // ms between frame uploads (was 500 — now ~5fps)
+#define FRAME_INTERVAL  200     // ms between frame uploads (was 500 — now ~5fps)
 
 // ── Camera pinout (AI Thinker ESP32-CAM) ─────────────────
 #define CAM_PIN_PWDN    32
@@ -335,8 +335,32 @@ void handleRemoteOta(const String& url, const String& version) {
   otaInProgress = true;
   mqtt.publish("greenhouse/camera/ota/status", "{\"status\":\"starting\"}");
 
+  // FIX — free the persistent frame-upload TLS connection before opening
+  // another one for the OTA download. This board is memory-constrained;
+  // running the upload connection + MQTT connection + a fresh OTA
+  // connection all at once can exhaust heap and make the OTA connect()
+  // fail outright (reported generically as "connection refused").
+  uploadClient.stop();
+  uploadClientConnected = false;
+  Serial.printf("[OTA] Free heap before download: %u\n", ESP.getFreeHeap());
+
+  // Diagnostics — same host as the frame-upload connection, which works
+  // fine, so this narrows down whether OTA's failure is really network-
+  // level or something specific to the update path.
+  IPAddress otaResolved;
+  if (WiFi.hostByName(BACKEND_HOST, otaResolved)) {
+    Serial.printf("[OTA][DNS] %s -> %s\n", BACKEND_HOST, otaResolved.toString().c_str());
+  } else {
+    Serial.println("[OTA][DNS] resolution FAILED");
+  }
+
   WiFiClientSecure otaClient;
   otaClient.setInsecure();  // matches the rest of this firmware's TLS handling
+
+  bool testConnect = otaClient.connect(BACKEND_HOST, BACKEND_PORT);
+  Serial.printf("[OTA] Test connect to %s:%d -> %s (heap now: %u)\n",
+                BACKEND_HOST, BACKEND_PORT, testConnect ? "OK" : "FAILED", ESP.getFreeHeap());
+  otaClient.stop();
 
   t_httpUpdate_return ret = httpUpdate.update(otaClient, url);
 
