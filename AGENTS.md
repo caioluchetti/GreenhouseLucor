@@ -26,22 +26,27 @@ Browser (React SPA) ←HTTP→ Nginx :8085 ←proxy /api/*→ FastAPI :6001 (Doc
 |---|---|
 | `src/App.jsx` | Root: 4 tabs, estado global, polling, todos os callbacks |
 | `src/index.css` | Design system completo (~460 linhas): variáveis CSS, tema dark/light, animações |
-| `src/components/Dashboard.jsx` | Grid de 3 ZoneCards + SensorPanel, calcula próxima rega |
+| `src/components/Dashboard.jsx` | Grid de 3 ZoneCards + LightCard + SensorPanel, calcula próxima rega |
 | `src/components/ZoneCard.jsx` | Card de zona: ON/OFF toggle, timer irrigação, rename, emoji edit |
+| `src/components/LightCard.jsx` | Card da luz de crescimento: toggle ON/OFF (glow âmbar), espelho visual do ZoneCard |
 | `src/components/SensorPanel.jsx` | 4 cards: temp/umid dentro e fora da estufa |
 | `src/components/SensorCharts.jsx` | Gráficos Chart.js: temperatura + umidade, períodos 1h/24h/7d/30d, botão limpar |
 | `src/components/ScheduleList.jsx` | Lista de agendamentos por zona/luz, toggle enable, CRUD |
 | `src/components/ScheduleForm.jsx` | Modal criar/editar schedule: zona/luz, dias, hora, duração |
-| `src/components/ClimatePanel.jsx` | Controle de exaustor (auto/on/off), thresholds temp, grow light |
+| `src/components/ClimatePanel.jsx` | Controle de exaustor (auto/on/off) + thresholds de temperatura (luz foi movida p/ Dashboard) |
 | `src/components/StatusBar.jsx` | Header: título "TATUFA", toggle tema ☀️/🌙, status ESP, relógio |
 | `api/server.py` | FastAPI app: 18 endpoints REST, lifespan (MQTT+scheduler+histórico) |
 | `api/models.py` | Schemas Pydantic: zonas, sensores, schedules, clima, luz, histórico |
 | `api/database.py` | SQLAlchemy ORM: 5 tabelas, auto-migration, seed data, auto-cleanup |
 | `api/mqtt_client.py` | `MockMQTT` (dev) + `RealMQTT` (prod): sensores, zones, clima, luz |
 | `api/scheduler.py` | Agendador: loop a cada 5s, dias em inglês (hardcoded), remaining dinâmico |
-| `esp32-firmware/greenhouse_lucor_esp32.ino` | Firmware ESP32 autônomo: NTP, NVS, scheduler local, MQTT |
+| `esp32-firmware/greenhouse_lucor_esp32/greenhouse_lucor_esp32.ino` | Firmware ESP32 principal (irrigação/clima/luz): autônomo, NTP, NVS, scheduler local, MQTT |
+| `esp32-firmware/greenhouse_lucor_esp32/platformio.ini` | Config PlatformIO: board `esp32dev`, libs, `src_dir=.` (compat Arduino IDE) |
+| `esp32-firmware/greenhouse_lucor_esp32/build/esp32.esp32.esp32dev/` | Artefatos de build commitados: `.bin` (app), `bootloader.bin`, `partitions.bin`, `boot_app0.bin`, `.elf`, `.map`, `flash_args` |
+| `esp32-firmware/greenhouse_cam_esp32cam.ino` | Firmware ESP32-CAM (câmera): stream MJPEG → HTTPS POST `/api/camera/frame` |
+| `esp32-firmware/greenhouse_cam_esp32cam/build/esp32.esp32.esp32cam/` | Artefatos de build do CAM commitados (mesmo layout do firmware principal) |
 | `docker-compose.yml` | Stack Docker do backend (container único) |
-| `greenhouse-lucor.nginx.conf` | Config Nginx: porta 8085, proxy /api/* → :6001 |
+| `greenhouse-lucor.nginx.conf` | Config Nginx: porta 8085, proxy /api/* → :6001, `client_max_body_size 20M` (uploads de firmware/frames) |
 | `deploy.sh` | Script de deploy: build frontend + copia dist + instala nginx config |
 
 ---
@@ -54,7 +59,7 @@ npm run dev              # Frontend (Vite) + backend (mock) — não precisa de 
 npm run dev:frontend     # Só Vite
 npm run dev:backend      # Só backend Python (MQTT_MODE=mock)
 
-# Build & Deploy
+# Build & Deploy (Frontend)
 npm run build            # Vite → dist/
 npm run deploy           # build + cp dist/* → /var/www/greenhouse-lucor/
 npm run preview          # Preview local do build (sem backend)
@@ -64,6 +69,11 @@ docker compose up -d --build   # Build + start
 docker compose logs -f          # Logs em tempo real
 docker restart greenhouse-backend   # Reiniciar
 docker inspect --format='{{.State.Health.Status}}' greenhouse-backend  # healthcheck
+
+# Firmware ESP32 (ver seção 🔩 abaixo para detalhes)
+pio run -d esp32-firmware/greenhouse_lucor_esp32                              # build → .bin
+pio run -d esp32-firmware/greenhouse_lucor_esp32 -t upload                     # flash via USB
+pio run -d esp32-firmware/greenhouse_cam_esp32cam                             # build ESP32-CAM
 ```
 
 ### Deploy completo (produção)
@@ -81,7 +91,135 @@ docker run -d --name greenhouse-backend --restart unless-stopped \
 # 2. Frontend
 npm run deploy
 sudo nginx -t && sudo systemctl reload nginx
+
+# 3. Firmware (opcional — só se mudou código C/C++ do ESP32)
+pio run -d esp32-firmware/greenhouse_lucor_esp32 -t upload        # USB
+# ..ou via OTA remoto (ver seção 🔩 Firmware ESP32 abaixo)
 ```
+
+---
+
+## 🔩 Firmware ESP32 (build, flash e OTA)
+
+O firmware do ESP32 principal vive em `esp32-firmware/greenhouse_lucor_esp32/`. É um projeto PlatformIO + Arduino IDE (o `.ino` está na raiz da pasta, não em `src/`, porque o `platformio.ini` define `src_dir = .` — isso preserva a convenção do Arduino IDE onde o nome do arquivo `.ino` deve bater com o nome da pasta).
+
+### Pré-requisitos
+
+- **PlatformIO Core** instalado (`pip install platformio` ou `pio` no PATH). No primeiro build, a toolchain `espressif32@^6.7.0` (~300-500 MB) é baixada automaticamente em `~/.platformio/`.
+- **Drivers USB** pro conversor CP2102 / CH340 do ESP32 DevKit (no Linux: `udevadm` + `dialout` group; a porta aparece em `/dev/ttyUSB0` ou `/dev/ttyACM0`).
+- **Backend no ar** (para OTA remoto) com o endpoint `POST /api/firmware/upload` escutando — já implementado em `api/server.py:497`.
+
+### Como compilar (gerar o `.bin`)
+
+```bash
+# Esp32 principal (irrigação/clima/luz)
+pio run -d esp32-firmware/greenhouse_lucor_esp32
+
+# ESP32-CAM (câmera)
+pio run -d esp32-firmware/greenhouse_cam_esp32cam
+```
+
+Saída do build principal:
+- Intermediários: `esp32-firmware/greenhouse_lucor_esp32/.pio/build/esp32dev/` (ignorado por `.gitignore`)
+- Artefatos flashables: `esp32-firmware/greenhouse_lucor_esp32/build/esp32.esp32.esp32dev/`:
+  - `greenhouse_lucor_esp32.ino.bin` (app, ~1.06 MB, vai em `0x10000`)
+  - `greenhouse_lucor_esp32.ino.bootloader.bin` (~17 KB, em `0x1000`)
+  - `greenhouse_lucor_esp32.ino.partitions.bin` (3 KB, em `0x8000`)
+  - `boot_app0.bin` (8 KB, em `0xe000` — copiado do framework Arduino)
+  - `greenhouse_lucor_esp32.ino.elf` + `.map` (debugging/símbolos)
+  - `flash_args` (argumentos prontos pra `esptool.py`)
+
+Ao final do build, copie os artefatos de `.pio/build/esp32dev/` para `build/esp32.esp32.esp32dev/` (mantendo os nomes `greenhouse_lucor_esp32.ino.*`) para que fiquem commitados e disponíveis pra flash/OTA sem precisar rebuildar em outra máquina.
+
+### Flash via USB (serial)
+
+**Opção A — PlatformIO (recomendado, automatizado):**
+```bash
+# Conecte o ESP32 via USB e identifique a porta (ex.: /dev/ttyUSB0)
+pio run -d esp32-firmware/greenhouse_lucor_esp32 -t upload \
+  --upload-port /dev/ttyUSB0
+```
+PlatformIO grava bootloader + partitions + app + boot_app0 automaticamente.
+
+**Opção B — esptool.py manual (flash full com os artefatos commitados):**
+```bash
+cd esp32-firmware/greenhouse_lucor_esp32/build/esp32.esp32.esp32dev
+esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
+  write_flash --flash-mode dio --flash-freq 40m --flash-size 4MB \
+  0x1000  greenhouse_lucor_esp32.ino.bootloader.bin \
+  0x8000  greenhouse_lucor_esp32.ino.partitions.bin \
+  0xe000  boot_app0.bin \
+  0x10000 greenhouse_lucor_esp32.ino.bin
+```
+
+**Opção C — só o app (quando muda só o código, bootloader já estava gravado):**
+```bash
+esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
+  write_flash 0x10000 greenhouse_lucor_esp32.ino.bin
+```
+
+### Flash via OTA (remoto, pelo backend)
+
+O fluxo OTA está implementado no backend (`api/server.py:497-547`) e no firmware (`HTTPUpdate` + tópico MQTT `greenhouse/ota/update`). Requer que o ESP32 esteja **online** e ouvindo o broker MQTT.
+
+```bash
+# 1. Upload do .bin pro backend
+curl -F "file=@esp32-firmware/greenhouse_lucor_esp32/build/esp32.esp32.esp32dev/greenhouse_lucor_esp32.ino.bin" \
+  "https://greenhouse.cortada-server.ddns.net/api/firmware/upload?version=1.1.0&device=greenhouse"
+
+# 2. Disparar o update via MQTT (o ESP32 baixa e flasheia sozinho)
+curl -X POST "https://greenhouse.cortada-server.ddns.net/api/firmware/deploy?filename=greenhouse_v1.1.0.bin&version=1.1.0&device=greenhouse"
+
+# 3. Acompanhar o status (idle/downloading/flashing/rebooting/error)
+curl "https://greenhouse.cortada-server.ddns.net/api/firmware/status?device=greenhouse"
+```
+
+`device` aceita `greenhouse` (irrigação) ou `camera` (ESP32-CAM). Para o CAM use `device=camera` e o `.ino` em `esp32-firmware/greenhouse_cam_esp32cam.ino`.
+
+### Pinos do ESP32 principal
+
+| GPIO | Função |
+|---|---|
+| 19 | Relé Zone 1 |
+| 18 | Relé Zone 2 |
+| 5  | Relé Zone 3 |
+| 17 | Relé exaustor |
+| 16 | Relé luz de crescimento |
+| 32 | DHT22 (interno) |
+| 33 | DHT11 (externo) |
+| 14 (SDA) / 27 (SCL) | LCD 16x2 I2C (addr 0x27) |
+
+Relés são **active-LOW**: `RELAY_ON = LOW`, `RELAY_OFF = HIGH`.
+
+### Bibliotecas Arduino (declaradas em `platformio.ini`)
+
+- **WiFiManager** (tzapu) — captive portal Wi-Fi provisioning
+- **PubSubClient** (Nick O'Leary) — MQTT
+- **DHT sensor library** (Adafruit) + Adafruit Unified Sensor — DHT22/DHT11
+- **ArduinoJson** v6 (Benoit Blanchon) — parse JSON. **Atenção:** o firmware usa `StaticJsonDocument<>` (API v6); não subir pra v7 sem refactor
+- **LiquidCrystal_I2C** (marcoschwartz) — LCD 16x2 via PCF8574
+
+### Particionamento e tamanho
+
+`default.csv` (Arduino core) — OTA-capaz:
+```
+app0      ota_0   0x10000    1.28 MB
+app1      ota_1   0x150000   1.28 MB
+otadata   data     0xe000    8 KB
+nvs       data     0x9000    20 KB  ← climate, schedules, (futuro) wifi
+spiffs    data     0x290000   1.5 MB
+```
+
+Uso atual do firmware: **Flash 82.5% (~1.06 MB / 1.28 MB)**, **RAM 16.4%**. OTA funciona porque o `.bin` cabe no slot `ota_0` com folga.
+
+### Gotchas de firmware
+
+1. **Bug conhecido — Wi-Fi não persiste entre reboots**: o `connectWiFi()` em `greenhouse_lucor_esp32.ino` chama só `wifiManager.autoConnect()` sem `setSaveConfigCallback` nem `WiFiManagerParameter`, e sem namespace `"wifi"` no NVS. A senha não é recuperável pelo `WiFi.SSID()` no cold boot, então o AP "Tatufa-Setup" reabre a cada reboot. **Fix planejado:** salvar SSID/pass no NVS via callback do portal e chamar `WiFi.begin(loadedSsid, loadedPass)` antes de `autoConnect()`.
+2. **ArduinoJson v6**: o firmware usa `StaticJsonDocument<N>`, `deserializeJson`, ` JsonObject` — API v6. NÃO subir pra ArduinoJson v7 no `platformio.ini` sem refatorar (v7 remove esses tipos).
+3. **`setBreakAfterConfig(true)` + `ESP.restart()`** em `connectWiFi()` criam reboot loop se o usuário errar a senha no portal — ao fixar o item 1, considere trocar pra `setBreakAfterConfig(false)`.
+4. **Build/commit de artefatos**: os `.bin`/`.elf`/`.map`/`bootloader.bin`/`partitions.bin`/`boot_app0.bin` em `build/` são commitados intencionalmente (para flash/OTA sem rebuild). Já `.pio/` está no `.gitignore` (intermediários descartáveis).
+5. **PlatformIO + Arduino IDE coexistem**: o `platformio.ini` usa `src_dir = .` pra que o `.ino` continue funcionando na Arduino IDE (que exige nome da pasta = nome do arquivo). Não mover o `.ino` pra `src/`.
+6. **ESP32-CAM tem firmware separado** (`esp32-firmware/greenhouse_cam_esp32cam.ino`): stream MJPEG → HTTPS POST `/api/camera/frame`. Não tem OTA USB wired além do `pio run -t upload` — o upload OTA usa `device=camera` no endpoint do backend.
 
 ---
 
@@ -161,17 +299,7 @@ Key: "s0_en"       → bool
 ... até s19_*
 ```
 
-### Bibliotecas Arduino necessárias
-
-- **PubSubClient** (Nick O'Leary) — MQTT
-- **DHT sensor library** (Adafruit) — DHT22/DHT11
-- **ArduinoJson** (Benoit Blanchon) — parse JSON
-- **LiquidCrystal_I2C** (frank de brabander) — LCD 16x2 via I2C
-- **Preferences** (built-in) — NVS
-- **WiFi** (built-in)
-- **time.h** (built-in) — NTP
-
-Board: `esp32dev`, framework: `arduino`
+As bibliotecas Arduino e a board (`esp32dev`) estão declaradas no `platformio.ini` — ver seção 🔩 Firmware ESP32 acima.
 
 ---
 
@@ -242,10 +370,10 @@ Este projeto usa Tailwind v4 com plugin `@tailwindcss/vite`. **Não existe** `ta
 ### ESP32
 
 - **Relés active-LOW**: `#define RELAY_ON LOW`, `#define RELAY_OFF HIGH`
-- **Pinos GPIO**: 26, 27, 14 = irrigação / 25 = exaustor / 33 = luz / 15 = DHT22 / 4 = DHT11 / 21 = LCD SDA / 22 = LCD SCL
+- **Pinos GPIO**: ver tabela "Pinos do ESP32 principal" na seção 🔩 Firmware ESP32 acima (valores autoritativos vindos dos `#define` no `.ino` — não confiar no comentário de cabeçalho do `.ino`, que está stale)
 - **LCD I2C**: 16x2, address 0x27, 3 páginas rotativas (sensores, zonas, conectividade), refresh a cada 500ms, troca de página a cada 3s
 - **MQTT buffer**: 4096 bytes (para receber array JSON de schedules)
-- **NVS namespaces**: `"climate"`, `"schedules"` (não colidir)
+- **NVS namespaces**: `"climate"`, `"schedules"` (não colidir; `"wifi"` planejado pro fix de persistência Wi-Fi)
 
 ---
 
