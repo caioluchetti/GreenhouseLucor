@@ -35,9 +35,66 @@ mqt = None
 mqtt = None
 scheduler = None
 _history_running = True
+_camera_stream_running = True
 
 _latest_frame: bytes | None = None
 _last_frame_time: float = 0.0
+
+
+def _camera_stream_loop():
+    """Background thread: opens ONE persistent connection to the ESP32-CAM
+    MJPEG stream, parses individual JPEG frames from the multipart response,
+    and stores the latest frame in _latest_frame. This lets /api/camera/proxy
+    fan-out to N viewers without each viewer hitting the camera directly
+    (the ESP32-CAM WebServer is single-threaded and can only handle one
+    /stream client at a time)."""
+    global _latest_frame, _last_frame_time, _camera_stream_running
+    stream_url = os.environ.get("CAMERA_STREAM_URL", "http://tatufa-cam.ddns.net:8085/stream")
+    while _camera_stream_running:
+        try:
+            req = urllib.request.Request(stream_url)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                buf = b""
+                while _camera_stream_running:
+                    chunk = resp.read(4096)
+                    if not chunk:
+                        break
+                    buf += chunk
+                    # Parse MJPEG frames: "--frame\r\nContent-Type: ...\r\nContent-Length: N\r\n\r\n<jpeg>\r\n"
+                    while True:
+                        boundary = buf.find(b"--frame\r\n")
+                        if boundary == -1:
+                            break
+                        # Find end of headers (double CRLF after headers)
+                        header_end = buf.find(b"\r\n\r\n", boundary)
+                        if header_end == -1:
+                            break
+                        header_str = buf[boundary:header_end].decode("ascii", errors="ignore")
+                        # Extract Content-Length
+                        cl_match = ""
+                        for line in header_str.split("\r\n"):
+                            if line.lower().startswith("content-length:"):
+                                cl_match = line.split(":", 1)[1].strip()
+                                break
+                        if not cl_match:
+                            # Not a data frame (could be text/plain "Waiting")
+                            buf = buf[header_end + 4:]
+                            continue
+                        content_len = int(cl_match)
+                        frame_start = header_end + 4
+                        frame_end = frame_start + content_len
+                        if len(buf) < frame_end:
+                            break  # need more data
+                        jpeg = buf[frame_start:frame_end]
+                        _latest_frame = jpeg
+                        _last_frame_time = time.time()
+                        buf = buf[frame_end:]
+                        # Skip trailing \r\n after frame
+                        if buf[:2] == b"\r\n":
+                            buf = buf[2:]
+        except Exception as e:
+            print(f"[Camera Stream] Connection error: {e} — retrying in 2s")
+            time.sleep(2)
 
 
 def _sensor_history_loop():
@@ -114,7 +171,7 @@ def _publish_schedule_sync():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global mqtt, scheduler, _history_running
+    global mqtt, scheduler, _history_running, _camera_stream_running
     print(f"[MQTT] Modo: {MODE}")
     if MODE == "real":
         broker = os.environ.get("MQTT_BROKER", "localhost")
@@ -124,8 +181,10 @@ async def lifespan(app: FastAPI):
         mqtt = MockMQTT(on_zone_state=on_zone_state, on_climate_request=on_climate_request, on_schedule_request=on_schedule_request)
     scheduler = Scheduler(mqtt)
     threading.Thread(target=_sensor_history_loop, daemon=True).start()
+    threading.Thread(target=_camera_stream_loop, daemon=True).start()
     yield
     _history_running = False
+    _camera_stream_running = False
     mqtt.stop()
     scheduler.stop()
 
@@ -495,19 +554,20 @@ CAMERA_STREAM_URL = os.environ.get("CAMERA_STREAM_URL", "http://tatufa-cam.ddns.
 
 @app.get("/api/camera/proxy")
 async def camera_proxy():
-    def stream_generator():
-        try:
-            req = urllib.request.Request(CAMERA_STREAM_URL)
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                while True:
-                    chunk = resp.read(4096)
-                    if not chunk:
-                        break
-                    yield chunk
-        except Exception:
-            yield b"--frame\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nCamera stream unavailable\r\n"
+    def frame_generator():
+        sent = False
+        while True:
+            frame = _latest_frame
+            if frame:
+                sent = True
+                yield (b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n" +
+                    f"Content-Length: {len(frame)}\r\n\r\n".encode() + frame + b"\r\n")
+            elif not sent:
+                yield b"--frame\r\nContent-Type: text/plain\r\nContent-Length: 7\r\n\r\nWaiting\r\n"
+            time.sleep(0.1)   # ~10fps poll of _latest_frame (camera produces ~5fps)
     return StreamingResponse(
-        stream_generator(),
+        frame_generator(),
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
     )
