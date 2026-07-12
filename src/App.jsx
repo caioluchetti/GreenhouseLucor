@@ -282,8 +282,10 @@ export default function App() {
                 zoneNames={zoneNames}
                 schedules={schedules}
                 cameraUrl={cameraUrl}
+                light={light}
                 onToggle={toggleZone}
                 onRename={renameZone}
+                onLightToggle={toggleLight}
               />
             ) : tab === 'schedules' ? (
               <SchedulesView
@@ -306,10 +308,8 @@ export default function App() {
               <ClimatePanel
                 climateRules={climateRules}
                 climateStatus={climateStatus}
-                light={light}
                 onRuleUpdate={updateClimateRules}
                 onFanModeSet={setFanMode}
-                onLightToggle={toggleLight}
               />
             )}
           </div>

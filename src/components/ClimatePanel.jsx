@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 
-export default function ClimatePanel({ climateRules, climateStatus, light, onRuleUpdate, onFanModeSet, onLightToggle }) {
+export default function ClimatePanel({ climateRules, climateStatus, onRuleUpdate, onFanModeSet }) {
   const [tempHigh, setTempHigh] = useState('')
   const [tempLow, setTempLow] = useState('')
   const [saving, setSaving] = useState(false)
@@ -154,47 +154,6 @@ export default function ClimatePanel({ climateRules, climateStatus, light, onRul
         </button>
         <p className="text-[10px] text-(--sp-text-muted) mt-2">
           Diferença entre ligar/desligar = histerese (evita liga/desliga rápido).
-        </p>
-      </div>
-
-      {/* ── Light control ── */}
-      <div className="sp-glass p-5">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-xs font-semibold text-(--sp-text-dim) tracking-widest uppercase">
-            💡 Luz
-          </h3>
-          <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono uppercase tracking-wide ${
-            light?.state === 'on'
-              ? 'bg-amber-500/15 text-amber-300 border border-amber-400/30'
-              : 'bg-(--sp-surface-raised) text-(--sp-text-muted) border border-(--sp-border-subtle)'
-          }`}>
-            {light?.state === 'on' ? 'ON' : 'OFF'}
-          </span>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            onClick={() => onLightToggle('OFF')}
-            className={`py-2.5 rounded-xl text-sm font-medium transition-all duration-200 border ${
-              light?.state !== 'on'
-                ? 'bg-(--sp-surface-raised) text-(--sp-text-muted) border-(--sp-border-subtle)'
-                : 'bg-(--sp-surface-raised) text-(--sp-text-muted) border-(--sp-border-subtle) hover:bg-(--sp-surface-raised-hover-strong)'
-            }`}
-          >
-            ⭕ Desligar
-          </button>
-          <button
-            onClick={() => onLightToggle('ON')}
-            className={`py-2.5 rounded-xl text-sm font-medium transition-all duration-200 border ${
-              light?.state === 'on'
-                ? 'bg-amber-500/15 text-amber-300 border-amber-400/30 shadow-[0_0_16px_rgba(251,191,36,0.1)]'
-                : 'bg-(--sp-surface-raised) text-(--sp-text-muted) border-(--sp-border-subtle) hover:bg-(--sp-surface-raised-hover-strong)'
-            }`}
-          >
-            💡 Ligar
-          </button>
-        </div>
-        <p className="text-[10px] text-(--sp-text-muted) mt-2">
-          Pode ser agendada na aba <span className="font-medium">Agendamentos</span>.
         </p>
       </div>
     </div>

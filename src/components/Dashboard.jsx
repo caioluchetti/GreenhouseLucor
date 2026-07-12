@@ -1,4 +1,5 @@
 import ZoneCard from './ZoneCard.jsx'
+import LightCard from './LightCard.jsx'
 import SensorPanel from './SensorPanel.jsx'
 import CameraFeed from './CameraFeed.jsx'
 
@@ -51,7 +52,7 @@ function formatNextIrrigation(date) {
   return `Hoje ${timeStr}`
 }
 
-export default function Dashboard({ zones, sensors, irrigation, zoneNames, schedules, cameraUrl, onToggle, onRename }) {
+export default function Dashboard({ zones, sensors, irrigation, zoneNames, schedules, cameraUrl, light, onToggle, onRename, onLightToggle }) {
   return (
     <div className="animate-fade-in space-y-4 sm:space-y-6">
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-3 sm:gap-4 lg:items-stretch">
@@ -63,7 +64,7 @@ export default function Dashboard({ zones, sensors, irrigation, zoneNames, sched
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-2 sm:gap-4 order-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-4 order-3">
         {[1, 2, 3].map(id => (
           <ZoneCard
             key={id}
@@ -79,6 +80,10 @@ export default function Dashboard({ zones, sensors, irrigation, zoneNames, sched
             onIconChange={(icon) => onRename(id, undefined, icon)}
           />
         ))}
+        <LightCard
+          state={light?.state || 'off'}
+          onToggle={() => onLightToggle(light?.state === 'on' ? 'OFF' : 'ON')}
+        />
       </div>
     </div>
   )
