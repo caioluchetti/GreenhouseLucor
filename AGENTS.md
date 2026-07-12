@@ -14,7 +14,7 @@ Browser (React SPA) ←HTTP→ Nginx :8085 ←proxy /api/*→ FastAPI :6001 (Doc
 
 - **Frontend**: React 19 + Vite 8 + Tailwind CSS v4 (JSX, sem TypeScript) — raiz do repo
 - **Backend**: Python 3.12 + FastAPI + SQLite + MQTT — diretório `api/`
-- **Hardware**: ESP32 DevKit com 5 relés (módulo 8ch), DHT22 (dentro), DHT11 (fora), LCD 16x2 I2C
+- **Hardware**: ESP32 DevKit com 5 relés (módulo 8ch), DHT22 (dentro), DHT22 (fora), LCD 16x2 I2C
 - **Comunicação**: Frontend↔Backend via HTTP REST, Backend↔ESP32 via MQTT
 - **Design system**: Solarpunk/glassmorphism definido por CSS variables em `src/index.css`
 
@@ -186,7 +186,7 @@ curl "https://greenhouse.cortada-server.ddns.net/api/firmware/status?device=gree
 | 17 | Relé exaustor |
 | 16 | Relé luz de crescimento |
 | 32 | DHT22 (interno) |
-| 33 | DHT11 (externo) |
+| 33 | DHT22 (externo) |
 | 14 (SDA) / 27 (SCL) | LCD 16x2 I2C (addr 0x27) |
 
 Relés são **active-LOW**: `RELAY_ON = LOW`, `RELAY_OFF = HIGH`.
@@ -465,7 +465,7 @@ greenhouse/camera/timelapse/start   Broker→P4     "1"
 ## ⚠️ Gotchas
 
 1. **Dias da semana**: Sempre em inglês (`mon`/`tue`/`wed`...). O locale não é mais usado.
-2. **DHT11 externo**: Usa GPIO 4 com resistor pull-up de **2.2KΩ** (cabo longo). Sinal pode falhar — considerar DS18B20 como fallback.
+2. **DHT22 externo**: Usa GPIO 33 (era DHT11 na GPIO 4). DHT22 geralmente vem em módulo breakout com pull-up 10KΩ onboard — se for sensor avulso, use 10KΩ (não 2.2KΩ como o DHT11 antigo). Cabo longo ainda pode afetar o sinal — considerar DS18B20 como fallback se falhar.
 3. **Docker precisa de rebuild**: O container carrega o código no build. Mudanças em `api/*.py` exigem `docker build` + restart.
 4. **Volume do SQLite**: O volume `greenhouse-data` é persistente. Se precisar resetar o banco: `docker volume rm greenhouse-data`.
 5. **Porta 6001 já em uso?**: O Docker mapeia 6001. Se rodar backend local (sem Docker), mate o container primeiro.

@@ -10,7 +10,7 @@
  *       CH5 = Grow light        (GPIO 33)
  *       CH6-CH8 = spare (not wired)
  *   - DHT22: temperature + humidity inside (GPIO 15)
- *   - DHT11: temperature + humidity outside (GPIO 4)
+ *   - DHT22: temperature + humidity outside (GPIO 33)
  *   - LCD 16x2 with I2C backpack (address 0x27, GPIO 21=SDA, GPIO 22=SCL)
  *
  * Autonomous mode:
@@ -80,7 +80,7 @@
 #include <HTTPUpdate.h>           // NEW — remote HTTPS OTA
 
 // ── Firmware version ───────────────────────────────────────
-#define FW_VERSION "1.1.0"
+#define FW_VERSION "1.2.0"
 
 // ── Configuração ──────────────────────────────────────────
 // NOTE: these are now only used as a *first-boot seed*. WiFiManager
@@ -114,7 +114,7 @@ const char* OTA_PASSWORD   = "tatufa-ota-2026";   // change this before flashing
 #define DHTPIN       32  // Inside DHT
 #define DHTPIN_OUT   33  // Outside DHT
 #define DHTTYPE_IN   DHT22
-#define DHTTYPE_OUT  DHT11
+#define DHTTYPE_OUT  DHT22
 
 // Relays (Mapped to the right side of the ESP32)
 #define RELAY_Z1    19   // Zone 1 irrigation
