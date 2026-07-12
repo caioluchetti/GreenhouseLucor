@@ -29,7 +29,7 @@ export default function FirmwarePanel({ api }) {
       console.error('Firmware status fetch error:', err)
     }
     return null
-  }, [api])
+  }, [api, device])
 
   const fetchFiles = useCallback(async () => {
     try {
@@ -47,7 +47,6 @@ export default function FirmwarePanel({ api }) {
     fetchStatus()
     fetchFiles()
   }, [fetchStatus, fetchFiles])
-
   // Poll while an update is actively in progress
   const startPolling = useCallback(() => {
     if (pollRef.current) clearInterval(pollRef.current)
@@ -110,7 +109,7 @@ export default function FirmwarePanel({ api }) {
   }
 
   const redeploy = (filename) => {
-    const match = filename.match(/tatufa_v(.+)\.bin/)
+    const match = filename.match(/(?:tatufa|camera|greenhouse)_v(.+)\.bin/)
     const ver = match ? match[1] : ''
     deploy(filename, ver)
   }
