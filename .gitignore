@@ -11,3 +11,6 @@ api/data/
 *.log
 .vite-temp/
 dist.old/
+
+# PlatformIO build intermediates (the committed build/ folders hold the flashable artifacts)
+.pio/
