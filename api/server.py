@@ -9,6 +9,7 @@ import json
 import threading
 import time
 import shutil
+import urllib.request
 
 from models import (
     ZoneState, SensorReadings, StatusResponse,
@@ -488,6 +489,28 @@ async def camera_live():
 FIRMWARE_DIR = os.path.join(os.path.dirname(__file__), "data", "firmware")
 os.makedirs(FIRMWARE_DIR, exist_ok=True)
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://greenhouse.cortada-server.ddns.net")
+
+CAMERA_STREAM_URL = os.environ.get("CAMERA_STREAM_URL", "http://tatufa-cam.ddns.net:8085/stream")
+
+
+@app.get("/api/camera/proxy")
+async def camera_proxy():
+    def stream_generator():
+        try:
+            req = urllib.request.Request(CAMERA_STREAM_URL)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                while True:
+                    chunk = resp.read(4096)
+                    if not chunk:
+                        break
+                    yield chunk
+        except Exception:
+            yield b"--frame\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nCamera stream unavailable\r\n"
+    return StreamingResponse(
+        stream_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
 
 OTA_TOPICS = {
     "greenhouse": "greenhouse/ota/update",

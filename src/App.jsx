@@ -39,7 +39,7 @@ export default function App() {
   const [light, setLight] = useState({ state: 'off' })
   const [sensorHistory, setSensorHistory] = useState(null)
   const [chartPeriod, setChartPeriod] = useState('24h')
-  const [cameraUrl, setCameraUrl] = useState('')
+  const [cameraUrl, setCameraUrl] = useState(() => `${API}/camera/proxy`)
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -144,19 +144,9 @@ export default function App() {
         }
       } catch { /* keep previous time */ }
     }
-    async function fetchCameraStatus() {
-      try {
-        const res = await fetch(`${API}/camera/status`)
-        if (res.ok) {
-          const data = await res.json()
-          if (data.ip) setCameraUrl(`${API}/camera/live`)
-        }
-      } catch { /* keep previous url */ }
-    }
     checkEsp()
     fetchTime()
-    fetchCameraStatus()
-    const interval = setInterval(() => { checkEsp(); fetchTime(); fetchCameraStatus() }, 5000)
+    const interval = setInterval(() => { checkEsp(); fetchTime() }, 5000)
     return () => clearInterval(interval)
   }, [])
 
