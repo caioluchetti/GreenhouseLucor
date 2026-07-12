@@ -148,6 +148,7 @@ class RealMQTT:
             "outside_temperature": "--", "outside_humidity": "--",
         }
         self._ota_status = {"greenhouse": {"status": "idle"}, "camera": {"status": "idle"}}
+        self._ota_start_time = {"greenhouse": 0, "camera": 0}
         self._firmware_version = {"greenhouse": {"version": "unknown"}, "camera": {"version": "unknown"}}
         self._climate_status = {"fan": "off", "mode": "auto", "reason": "", "temp": "--", "hum": "--"}
         self._light_state = "off"
@@ -218,10 +219,22 @@ class RealMQTT:
             except Exception:
                 pass
         elif topic == "greenhouse/ota/status":
-            try: self._ota_status["greenhouse"] = json.loads(payload)
+            try:
+                data = json.loads(payload)
+                self._ota_status["greenhouse"] = data
+                if data.get("status") == "starting":
+                    self._ota_start_time["greenhouse"] = time.time()
+                else:
+                    self._ota_start_time["greenhouse"] = 0
             except Exception: pass
         elif topic == "greenhouse/camera/ota/status":
-            try: self._ota_status["camera"] = json.loads(payload)
+            try:
+                data = json.loads(payload)
+                self._ota_status["camera"] = data
+                if data.get("status") == "starting":
+                    self._ota_start_time["camera"] = time.time()
+                else:
+                    self._ota_start_time["camera"] = 0
             except Exception: pass
         elif topic == "greenhouse/firmware/version":
             try: self._firmware_version["greenhouse"] = json.loads(payload)
@@ -255,7 +268,12 @@ class RealMQTT:
         return (time.time() - self._last_heartbeat) < 60
   
     def get_ota_status(self, device="greenhouse"):
-        return dict(self._ota_status.get(device, {"status": "idle"}))
+        status = dict(self._ota_status.get(device, {"status": "idle"}))
+        if status.get("status") == "starting":
+            elapsed = time.time() - self._ota_start_time.get(device, 0)
+            if elapsed > 120:
+                return {"status": "failed", "reason": "timeout"}
+        return status
 
     def get_firmware_version(self, device="greenhouse"):
         return dict(self._firmware_version.get(device, {"version": "unknown"}))
