@@ -55,6 +55,13 @@ class SensorHistoryRow(Base):
     recorded_at = Column(String, nullable=False)
 
 
+class AuthConfigRow(Base):
+    __tablename__ = "auth_config"
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String, nullable=False, unique=True)
+    value = Column(String, nullable=False)
+
+
 Base.metadata.create_all(bind=engine)
 
 

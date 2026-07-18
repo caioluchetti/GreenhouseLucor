@@ -5,15 +5,16 @@ import ClimatePanel from './components/ClimatePanel.jsx'
 import SensorCharts from './components/SensorCharts.jsx'
 import StatusBar from './components/StatusBar.jsx'
 import FirmwarePanel from './components/FirmwarePanel.jsx'
+import Login from './components/Login.jsx'
 
 const API = import.meta.env.BASE_URL + 'api'
-
-const STORAGE_KEY = 'greenhouse-theme'
+const THEME_KEY = 'greenhouse-theme'
+const TOKEN_KEY = 'greenhouse-auth-token'
 
 export default function App() {
   const [theme, setTheme] = useState(() => {
     if (typeof window !== 'undefined') {
-      return localStorage.getItem(STORAGE_KEY) || 'dark'
+      return localStorage.getItem(THEME_KEY) || 'dark'
     }
     return 'dark'
   })
@@ -39,7 +40,72 @@ export default function App() {
   const [light, setLight] = useState({ state: 'off' })
   const [sensorHistory, setSensorHistory] = useState(null)
   const [chartPeriod, setChartPeriod] = useState('24h')
-  const [cameraUrl, setCameraUrl] = useState(() => `${API}/camera/proxy`)
+  const [cameraUrl] = useState(() => `${API}/camera/proxy`)
+
+  const [authToken, setAuthToken] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem(TOKEN_KEY) || null
+    }
+    return null
+  })
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [authChecked, setAuthChecked] = useState(false)
+  const [showLogin, setShowLogin] = useState(false)
+  const [changingPassword, setChangingPassword] = useState(false)
+  const [currentPw, setCurrentPw] = useState('')
+  const [newPw, setNewPw] = useState('')
+  const [pwError, setPwError] = useState('')
+  const [pwSuccess, setPwSuccess] = useState('')
+
+  const authHeaders = useCallback(() => {
+    if (!authToken) return {}
+    return { 'Authorization': `Bearer ${authToken}` }
+  }, [authToken])
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem(THEME_KEY, theme)
+  }, [theme])
+
+  useEffect(() => {
+    async function verify() {
+      const token = localStorage.getItem(TOKEN_KEY)
+      if (!token) {
+        setAuthChecked(true)
+        return
+      }
+      setAuthToken(token)
+      try {
+        const res = await fetch(`${API}/auth/verify`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        })
+        if (res.ok && (await res.json()).authenticated) {
+          setIsAuthenticated(true)
+        } else {
+          localStorage.removeItem(TOKEN_KEY)
+          setAuthToken(null)
+        }
+      } catch {
+        setIsAuthenticated(true)
+      }
+      setAuthChecked(true)
+    }
+    verify()
+  }, [])
+
+  const handleLogin = useCallback((token) => {
+    localStorage.setItem(TOKEN_KEY, token)
+    setAuthToken(token)
+    setIsAuthenticated(true)
+    setShowLogin(false)
+  }, [])
+
+  const handleLogout = useCallback(() => {
+    localStorage.removeItem(TOKEN_KEY)
+    setAuthToken(null)
+    setIsAuthenticated(false)
+    setTab('dashboard')
+  }, [])
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -82,11 +148,6 @@ export default function App() {
     }
   }, [])
 
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme)
-    localStorage.setItem(STORAGE_KEY, theme)
-  }, [theme])
-
   const fetchHistory = useCallback(async (p) => {
     const period = p || chartPeriod
     try {
@@ -104,13 +165,16 @@ export default function App() {
 
   const handleClearHistory = useCallback(async () => {
     try {
-      await fetch(`${API}/sensors/history`, { method: 'DELETE' })
+      await fetch(`${API}/sensors/history`, {
+        method: 'DELETE',
+        headers: authHeaders()
+      })
       setSensorHistory(null)
       setTimeout(() => fetchHistory(), 500)
     } catch (err) {
       console.error('Clear history error:', err)
     }
-  }, [fetchHistory])
+  }, [fetchHistory, authHeaders])
 
   useEffect(() => {
     fetchStatus()
@@ -153,14 +217,17 @@ export default function App() {
   const toggleZone = async (zoneId) => {
     const current = zones[`zone${zoneId}`] === 'ON'
     const action = current ? 'off' : 'on'
-    await fetch(`${API}/zones/${zoneId}/${action}`, { method: 'POST' })
+    await fetch(`${API}/zones/${zoneId}/${action}`, {
+      method: 'POST',
+      headers: authHeaders()
+    })
     fetchStatus()
   }
 
   const createSchedule = async (data) => {
     await fetch(`${API}/schedules`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(data)
     })
     fetchStatus()
@@ -169,14 +236,17 @@ export default function App() {
   const updateSchedule = async (id, data) => {
     await fetch(`${API}/schedules/${id}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(data)
     })
     fetchStatus()
   }
 
   const deleteSchedule = async (id) => {
-    await fetch(`${API}/schedules/${id}`, { method: 'DELETE' })
+    await fetch(`${API}/schedules/${id}`, {
+      method: 'DELETE',
+      headers: authHeaders()
+    })
     fetchStatus()
   }
 
@@ -186,7 +256,7 @@ export default function App() {
     if (icon !== undefined) body.icon = icon
     await fetch(`${API}/zones/${zoneId}/name`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(body)
     })
     setZoneNames(prev => ({
@@ -201,7 +271,7 @@ export default function App() {
   const updateClimateRules = async (data) => {
     const res = await fetch(`${API}/climate/rules`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(data)
     })
     if (res.ok) {
@@ -212,12 +282,18 @@ export default function App() {
   }
 
   const setFanMode = async (mode) => {
-    await fetch(`${API}/climate/fan/${mode}`, { method: 'POST' })
+    await fetch(`${API}/climate/fan/${mode}`, {
+      method: 'POST',
+      headers: authHeaders()
+    })
     fetchClimate()
   }
 
   const toggleLight = async (state) => {
-    await fetch(`${API}/light/${state}`, { method: 'POST' })
+    await fetch(`${API}/light/${state}`, {
+      method: 'POST',
+      headers: authHeaders()
+    })
     fetchClimate()
   }
 
@@ -225,7 +301,35 @@ export default function App() {
     setTheme(prev => prev === 'dark' ? 'light' : 'dark')
   }
 
-  const tabs = [
+  const handleChangePassword = async (e) => {
+    e.preventDefault()
+    setPwError('')
+    setPwSuccess('')
+    try {
+      const res = await fetch(`${API}/auth/set-password`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ current_password: currentPw, new_password: newPw })
+      })
+      if (res.ok) {
+        setPwSuccess('Senha alterada com sucesso!')
+        setCurrentPw('')
+        setNewPw('')
+        setTimeout(() => { setPwSuccess(''); setChangingPassword(false) }, 1500)
+      } else {
+        const data = await res.json()
+        setPwError(data.detail || 'Erro ao alterar senha')
+      }
+    } catch {
+      setPwError('Sem conexão com o servidor')
+    }
+  }
+
+  const guest = !isAuthenticated
+  const apiFetch = (url, opts = {}) =>
+    fetch(url, { ...opts, headers: { ...opts.headers, ...authHeaders() } })
+
+  const allTabs = [
     { key: 'dashboard', label: 'Dashboard', icon: '🌱' },
     { key: 'schedules', label: 'Agendamentos', icon: '⏰' },
     { key: 'climate', label: 'Clima', icon: '🌡️' },
@@ -233,9 +337,35 @@ export default function App() {
     { key: 'firmware', label: 'Firmware', icon: '🔧' },
   ]
 
+  const guestTabs = allTabs.filter(t => t.key === 'dashboard' || t.key === 'charts')
+  const tabs = guest ? guestTabs : allTabs
+
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen sp-bg relative flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-10 h-10 border-2 border-(--sp-loading-bg) border-t-(--sp-loading-accent) rounded-full animate-spin" />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen sp-bg relative">
-      <StatusBar espStatus={espStatus} serverTime={serverTime} theme={theme} onToggleTheme={toggleTheme} />
+      <StatusBar
+        espStatus={espStatus}
+        serverTime={serverTime}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        isAuthenticated={isAuthenticated}
+        onLoginClick={() => setShowLogin(true)}
+        onLogout={handleLogout}
+        onChangePassword={() => setChangingPassword(true)}
+      />
+
+      {showLogin && (
+        <Login api={API} onLogin={handleLogin} onClose={() => setShowLogin(false)} />
+      )}
 
       <div className="relative z-10">
         <div className="overflow-x-auto scrollbar-hide px-4 pt-5 max-w-5xl mx-auto">
@@ -276,6 +406,7 @@ export default function App() {
                 onToggle={toggleZone}
                 onRename={renameZone}
                 onLightToggle={toggleLight}
+                isGuest={guest}
               />
             ) : tab === 'schedules' ? (
               <SchedulesView
@@ -291,9 +422,10 @@ export default function App() {
                 period={chartPeriod}
                 onPeriodChange={handlePeriodChange}
                 onClearHistory={handleClearHistory}
+                isGuest={guest}
               />
             ) : tab === 'firmware' ? (
-              <FirmwarePanel api={API} />
+              <FirmwarePanel api={API} authHeaders={authHeaders} />
             ) : (
               <ClimatePanel
                 climateRules={climateRules}
@@ -305,6 +437,59 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {isAuthenticated && changingPassword && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(4,8,5,0.6)' }}
+          onClick={(e) => { if (e.target === e.currentTarget) { setChangingPassword(false); setPwError(''); setPwSuccess('') } }}
+          onKeyDown={(e) => { if (e.key === 'Escape') { setChangingPassword(false); setPwError(''); setPwSuccess('') } }}
+        >
+          <div className="sp-glass-modal p-6 sm:p-7 max-w-sm w-full animate-fade-in max-h-[90vh] overflow-y-auto relative">
+            <button
+              onClick={() => { setChangingPassword(false); setPwError(''); setPwSuccess('') }}
+              className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-lg text-(--sp-text-muted) hover:text-(--sp-text) hover:bg-(--sp-surface-raised-hover) transition-colors"
+              aria-label="Fechar"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+
+            <h3 className="text-sm font-semibold text-(--sp-text) mb-5">Alterar senha</h3>
+            <form onSubmit={handleChangePassword} className="space-y-4">
+              <div>
+                <label className="block text-[10px] uppercase tracking-wide text-(--sp-text-dim) mb-1.5">Senha atual</label>
+                <input type="password" value={currentPw} onChange={e => setCurrentPw(e.target.value)} className="sp-input w-full text-sm py-2.5 px-3" autoFocus />
+              </div>
+              <div>
+                <label className="block text-[10px] uppercase tracking-wide text-(--sp-text-dim) mb-1.5">Nova senha</label>
+                <input type="password" value={newPw} onChange={e => setNewPw(e.target.value)} className="sp-input w-full text-sm py-2.5 px-3" />
+              </div>
+              {pwError && <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{pwError}</p>}
+              {pwSuccess && <p className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2">{pwSuccess}</p>}
+              <div className="flex gap-3 justify-end pt-1">
+                <button type="button" onClick={() => { setChangingPassword(false); setPwError(''); setPwSuccess('') }} className="px-4 py-2 rounded-lg text-xs font-medium sp-btn-secondary">Cancelar</button>
+                <button type="submit" disabled={!currentPw || !newPw} className="px-4 py-2 rounded-lg text-xs font-medium sp-btn-primary disabled:opacity-40">Salvar</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {guest && !showLogin && (
+        <div className="fixed bottom-4 left-0 right-0 flex justify-center z-30 sm:hidden">
+          <button
+            onClick={() => setShowLogin(true)}
+            className="px-4 py-2 rounded-full text-xs font-semibold sp-glass-sm text-(--sp-accent) border border-(--sp-accent-border) hover:bg-(--sp-accent-bg) transition-all flex items-center gap-2 shadow-lg"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+            </svg>
+            Fazer login
+          </button>
+        </div>
+      )}
     </div>
   )
 }

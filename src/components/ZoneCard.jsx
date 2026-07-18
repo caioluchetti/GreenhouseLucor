@@ -10,6 +10,7 @@ export default function ZoneCard({ id, label, icon, state, irrigationRemaining, 
   const inputRef = useRef(null)
   const iconInputRef = useRef(null)
   const isOn = state === 'ON'
+  const isGuest = !onToggle && !onRename && !onIconChange
 
   useEffect(() => {
     if (irrigationTotal > 0 && irrigationRemaining > 0) {
@@ -85,8 +86,8 @@ export default function ZoneCard({ id, label, icon, state, irrigationRemaining, 
           className={`w-7 h-7 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center text-base sm:text-lg transition-colors duration-500 flex-shrink-0 cursor-pointer hover:bg-(--sp-accent-bg-light) ${
             isOn ? 'bg-(--sp-accent-bg)' : 'bg-(--sp-surface-raised)'
           }`}
-          onClick={() => { setEditIcon(icon); setEditingIcon(true) }}
-          title="Clique para mudar o ícone"
+          onClick={() => { if (!isGuest) { setEditIcon(icon); setEditingIcon(true) } }}
+          title={isGuest ? undefined : "Clique para mudar o ícone"}
         >
           {icon}
         </div>
@@ -105,9 +106,9 @@ export default function ZoneCard({ id, label, icon, state, irrigationRemaining, 
           />
         ) : (
           <span
-            className="font-semibold text-[11px] sm:text-sm text-(--sp-text) truncate cursor-pointer hover:text-(--sp-accent) transition-colors block max-w-full"
-            onClick={() => setEditing(true)}
-            title="Clique para renomear"
+            className={`font-semibold text-[11px] sm:text-sm text-(--sp-text) truncate block max-w-full ${isGuest ? '' : 'cursor-pointer hover:text-(--sp-accent) transition-colors'}`}
+            onClick={() => { if (!isGuest) setEditing(true) }}
+            title={isGuest ? undefined : "Clique para renomear"}
           >
             {label}
           </span>
@@ -143,16 +144,16 @@ export default function ZoneCard({ id, label, icon, state, irrigationRemaining, 
       ) : isOn ? (
         <button
           onClick={handleToggle}
-          disabled={animating}
-          className="mt-1.5 w-full py-1 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-semibold text-red-400 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-all uppercase tracking-wide"
+          disabled={animating || isGuest}
+          className="mt-1.5 w-full py-1 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-semibold text-red-400 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-all uppercase tracking-wide disabled:opacity-30 disabled:cursor-not-allowed"
         >
           Desligar
         </button>
       ) : (
         <button
           onClick={handleToggle}
-          disabled={animating}
-          className="mt-2 sm:mt-3 w-full py-1.5 sm:py-2 rounded-lg text-[10px] sm:text-xs font-semibold uppercase tracking-wide transition-all duration-300 bg-(--sp-surface-raised) text-(--sp-text-muted) border border-(--sp-border-subtle) hover:bg-(--sp-accent-bg-light) hover:text-(--sp-accent) hover:border-(--sp-accent-border)"
+          disabled={animating || isGuest}
+          className="mt-2 sm:mt-3 w-full py-1.5 sm:py-2 rounded-lg text-[10px] sm:text-xs font-semibold uppercase tracking-wide transition-all duration-300 bg-(--sp-surface-raised) text-(--sp-text-muted) border border-(--sp-border-subtle) hover:bg-(--sp-accent-bg-light) hover:text-(--sp-accent) hover:border-(--sp-accent-border) disabled:opacity-30 disabled:cursor-not-allowed"
         >
           {animating ? '⌛' : 'Ligar'}
         </button>
@@ -161,8 +162,8 @@ export default function ZoneCard({ id, label, icon, state, irrigationRemaining, 
       {irrigationActive && (
         <button
           onClick={handleToggle}
-          disabled={animating}
-          className="mt-1.5 w-full py-1 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-semibold text-red-400 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-all uppercase tracking-wide"
+          disabled={animating || isGuest}
+          className="mt-1.5 w-full py-1 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-semibold text-red-400 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-all uppercase tracking-wide disabled:opacity-30 disabled:cursor-not-allowed"
         >
           Desligar
         </button>

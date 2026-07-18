@@ -440,8 +440,13 @@
 /* ── Overlay backdrop ── */
 .sp-overlay {
   background: var(--sp-overlay-bg);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
+}
+
+@supports (backdrop-filter: blur(1px)) {
+  .sp-overlay {
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+  }
 }
 
 ::selection {

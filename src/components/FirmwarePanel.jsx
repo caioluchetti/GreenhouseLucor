@@ -8,7 +8,7 @@ const STATUS_LABELS = {
   no_update: 'Nenhuma atualização aplicada',
 }
 
-export default function FirmwarePanel({ api }) {
+export default function FirmwarePanel({ api, authHeaders }) {
   const [file, setFile] = useState(null)
   const [version, setVersion] = useState('')
   const [uploading, setUploading] = useState(false)
@@ -74,7 +74,7 @@ export default function FirmwarePanel({ api }) {
       const form = new FormData()
       form.append('file', file)
       const uploadRes = await fetch(`${api}/firmware/upload?version=${encodeURIComponent(version)}&device=${device}`, 
-      { method: 'POST', body: form })
+      { method: 'POST', body: form, headers: authHeaders() })
       if (!uploadRes.ok) {
         setMessage({ type: 'error', text: 'Falha no envio do arquivo' })
         return
@@ -95,7 +95,7 @@ export default function FirmwarePanel({ api }) {
   const deploy = async (filename, ver) => {
     try {
         const res = await fetch(`${api}/firmware/deploy?filename=${encodeURIComponent(filename)}&version=${encodeURIComponent(ver)}&device=${device}`,
-         { method: 'POST' })
+         { method: 'POST', headers: authHeaders() })
       if (res.ok) {
         setMessage({ type: 'ok', text: `Atualização para v${ver} enviada ao dispositivo` })
         startPolling()

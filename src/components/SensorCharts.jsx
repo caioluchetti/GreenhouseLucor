@@ -21,7 +21,7 @@ const PERIODS = [
   { key: '30d', label: '30 dias' },
 ]
 
-export default function SensorCharts({ history, onPeriodChange, period, onClearHistory }) {
+export default function SensorCharts({ history, onPeriodChange, period, onClearHistory, isGuest }) {
   const [showConfirm, setShowConfirm] = useState(false)
   const tempData = buildTempDataset(history)
   const humData = buildHumidityDataset(history)
@@ -58,12 +58,14 @@ export default function SensorCharts({ history, onPeriodChange, period, onClearH
             </button>
           ))}
         </div>
-        <button
-          onClick={() => setShowConfirm(true)}
-          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-all"
-        >
-          Limpar histórico
-        </button>
+        {!isGuest && (
+          <button
+            onClick={() => setShowConfirm(true)}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-all"
+          >
+            Limpar histórico
+          </button>
+        )}
       </div>
 
       <div className="sp-glass p-5">

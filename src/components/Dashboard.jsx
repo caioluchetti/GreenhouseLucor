@@ -52,7 +52,7 @@ function formatNextIrrigation(date) {
   return `Hoje ${timeStr}`
 }
 
-export default function Dashboard({ zones, sensors, irrigation, zoneNames, schedules, cameraUrl, light, onToggle, onRename, onLightToggle }) {
+export default function Dashboard({ zones, sensors, irrigation, zoneNames, schedules, cameraUrl, light, onToggle, onRename, onLightToggle, isGuest }) {
   return (
     <div className="animate-fade-in space-y-4 sm:space-y-6">
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-3 sm:gap-4 lg:items-stretch">
@@ -75,14 +75,14 @@ export default function Dashboard({ zones, sensors, irrigation, zoneNames, sched
             irrigationRemaining={irrigation[`zone${id}`]?.remaining || 0}
             irrigationTotal={irrigation[`zone${id}`]?.total || 0}
             nextIrrigation={formatNextIrrigation(getNextIrrigation(id, schedules))}
-            onToggle={() => onToggle(id)}
-            onRename={(name) => onRename(id, name, undefined)}
-            onIconChange={(icon) => onRename(id, undefined, icon)}
+            onToggle={isGuest ? null : () => onToggle(id)}
+            onRename={isGuest ? null : (name) => onRename(id, name, undefined)}
+            onIconChange={isGuest ? null : (icon) => onRename(id, undefined, icon)}
           />
         ))}
         <LightCard
           state={light?.state || 'off'}
-          onToggle={() => onLightToggle(light?.state === 'on' ? 'OFF' : 'ON')}
+          onToggle={isGuest ? null : () => onLightToggle(light?.state === 'on' ? 'OFF' : 'ON')}
         />
       </div>
     </div>

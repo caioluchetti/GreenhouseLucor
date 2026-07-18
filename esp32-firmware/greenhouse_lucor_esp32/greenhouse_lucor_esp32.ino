@@ -9,8 +9,8 @@
  *       CH4 = Exhaust fan       (GPIO 25)
  *       CH5 = Grow light        (GPIO 33)
  *       CH6-CH8 = spare (not wired)
- *   - DHT22: temperature + humidity inside (GPIO 15)
- *   - DHT22: temperature + humidity outside (GPIO 33)
+ *   - SHT40: temperature + humidity inside (I2C 0x44)
+ *   - DHT22: temperature + humidity outside (GPIO 32)
  *   - LCD 16x2 with I2C backpack (address 0x27, GPIO 21=SDA, GPIO 22=SCL)
  *
  * Autonomous mode:
@@ -72,9 +72,12 @@
 #include <WiFiManager.h>          // NEW — tzapu/WiFiManager
 #include <PubSubClient.h>
 #include <DHT.h>
+#include <Adafruit_SHT4x.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <LiquidCrystal_I2C.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 #include <Wire.h>
 #include <ArduinoOTA.h>           // NEW — LAN OTA
 #include <HTTPUpdate.h>           // NEW — remote HTTPS OTA
@@ -111,9 +114,8 @@ const char* OTA_PASSWORD   = "tatufa-ota-2026";   // change this before flashing
 
 // ── Pinos ─────────────────────────────────────────────────
 // ── Pinos ─────────────────────────────────────────────────
-#define DHTPIN       32  // Inside DHT
-#define DHTPIN_OUT   33  // Outside DHT
-#define DHTTYPE_IN   DHT22
+#define DHTPIN_OUT   32  // Outside DHT
+
 #define DHTTYPE_OUT  DHT22
 
 // Relays (Mapped to the right side of the ESP32)
@@ -133,12 +135,18 @@ const char* OTA_PASSWORD   = "tatufa-ota-2026";   // change this before flashing
 #define LCD_SDA     14   // Your chosen left-side pin
 #define LCD_SCL     27   // Your chosen left-side pin
 
+// ── OLED SSD1306 ────────────────────────────────────────────
+#define OLED_ADDR        0x3C
+#define OLED_WIDTH       128
+#define OLED_HEIGHT      64
+#define OLED_RESET       -1
+
 // ── Scheduler ──────────────────────────────────────────────
 #define MAX_SCHEDULES  20
 #define SCHED_INTERVAL_MS  10000   // check schedules every 10s
 
 // ── Globals ────────────────────────────────────────────────
-DHT dhtIn(DHTPIN, DHTTYPE_IN);
+Adafruit_SHT4x sht4;
 DHT dhtOut(DHTPIN_OUT, DHTTYPE_OUT);
 WiFiClientSecure espClient;
 PubSubClient mqtt(espClient);
@@ -202,6 +210,11 @@ float lcdHumOut  = NAN;
 
 // ── OTA state (NEW) ─────────────────────────────────────────
 bool otaInProgress = false;
+
+// ── OLED ────────────────────────────────────────────────────
+Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
+unsigned long lastOledRefresh = 0;
+const unsigned long OLED_REFRESH_MS = 500;
 
 // ── LCD display ───────────────────────────────────────────
 void lcdShowBoot() {
@@ -306,6 +319,130 @@ void updateLcd(unsigned long now) {
     lastLcdRefresh = now;
     lcdRenderPage();  // refresh in-place so live values update
   }
+}
+
+// ── OLED display ──────────────────────────────────────────
+void oledPrintFloat(float v, int dec, int width) {
+  if (isnan(v)) {
+    display.print("--");
+    return;
+  }
+  char buf[8];
+  dtostrf(v, width, dec, buf);
+  display.print(buf);
+}
+
+void renderDisplay() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  // ── Top bar (y=0): title + connectivity + firmware ──
+  display.setCursor(0, 0);
+  display.print("Tatufa");
+
+  bool wifiOk = (WiFi.status() == WL_CONNECTED);
+  bool mqttOk = mqtt.connected();
+  display.setCursor(50, 0);
+  display.print(wifiOk ? "W" : "w");
+  display.print(mqttOk ? "M" : "m");
+  display.print(timeSynced ? "N" : "n");
+
+  display.setCursor(88, 0);
+  display.print("v");
+  display.print(FW_VERSION);
+
+  // ── Divider at y=14 ──
+  display.drawFastHLine(0, 14, OLED_WIDTH, SSD1306_WHITE);
+
+  // ── Inside conditions (y=18) ──
+  display.setCursor(0, 18);
+  display.print("In:  ");
+  oledPrintFloat(lcdTempIn, 1, 4);
+  display.print("C  ");
+  oledPrintFloat(lcdHumIn, 0, 3);
+  display.print("%");
+
+  // ── Outside conditions (y=30) ──
+  display.setCursor(0, 30);
+  display.print("Out: ");
+  oledPrintFloat(lcdTempOut, 1, 4);
+  display.print("C  ");
+  oledPrintFloat(lcdHumOut, 0, 3);
+  display.print("%");
+
+  // ── Divider at y=41 ──
+  display.drawFastHLine(0, 41, OLED_WIDTH, SSD1306_WHITE);
+
+  // ── Zones (y=45) ──
+  display.setCursor(0, 45);
+  display.print("Z1:");
+  display.print(zoneStates[0]);
+  display.setCursor(43, 45);
+  display.print("Z2:");
+  display.print(zoneStates[1]);
+  display.setCursor(86, 45);
+  display.print("Z3:");
+  display.print(zoneStates[2]);
+
+  // ── Fan + Light (y=56) ──
+  display.setCursor(0, 56);
+  display.print("Fan:");
+  display.print(fanState ? "ON " : "OFF");
+  display.setCursor(70, 56);
+  display.print("Lgt:");
+  display.print(lightState ? "ON" : "OFF");
+
+  display.display();
+}
+
+void updateDisplay(unsigned long now) {
+  if (otaInProgress) return;
+  if (now - lastOledRefresh > OLED_REFRESH_MS) {
+    lastOledRefresh = now;
+    renderDisplay();
+  }
+}
+
+// ── OLED special screens ───────────────────────────────────
+void oledShowBoot() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 16);
+  display.println("Tatufa Greenhouse");
+  display.setCursor(0, 34);
+  display.println("OLED booting...");
+  display.display();
+}
+
+void oledShowWifiSetup() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 12);
+  display.println("WiFi setup mode");
+  display.setCursor(0, 30);
+  display.print("AP: ");
+  display.print(WIFI_AP_NAME);
+  display.display();
+}
+
+void oledShowOta(int percent) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 12);
+  display.println("Updating fw...");
+  display.setCursor(0, 34);
+  display.print("Progress: ");
+  display.print(percent);
+  display.print("%");
+  // progress bar at y=44
+  int barW = map(percent, 0, 100, 0, OLED_WIDTH - 8);
+  display.drawRect(4, 44, OLED_WIDTH - 8, 10, SSD1306_WHITE);
+  display.fillRect(4, 44, barW, 10, SSD1306_WHITE);
+  display.display();
 }
 
 // ── NTP ────────────────────────────────────────────────────
@@ -487,10 +624,12 @@ void onConfigPortalStart(WiFiManager* mgr) {
   Serial.println("[WiFi] No connection — opened config portal AP");
   Serial.printf("[WiFi] Connect to \"%s\" and go to 192.168.4.1\n", WIFI_AP_NAME);
   lcdShowWifiSetup();
+  oledShowWifiSetup();
 }
 
 void connectWiFi() {
   lcdShowBoot();
+  oledShowBoot();
 
   wifiManager.setConnectTimeout(WIFI_CONNECT_TIMEOUT_S);   // time to try saved creds
   wifiManager.setConfigPortalTimeout(WIFI_PORTAL_TIMEOUT_S); // time the portal stays open
@@ -529,10 +668,12 @@ void setupArduinoOTA() {
     otaInProgress = true;
     Serial.println("[OTA] LAN update starting...");
     lcdShowOta(0);
+    oledShowOta(0);
   });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
     int pct = (progress * 100) / total;
     lcdShowOta(pct);
+    oledShowOta(pct);
   });
   ArduinoOTA.onEnd([]() {
     Serial.println("[OTA] LAN update complete — rebooting");
@@ -557,6 +698,7 @@ void handleRemoteOta(const String& url, const String& version) {
   Serial.printf("[OTA] Remote update requested: %s (v%s)\n", url.c_str(), version.c_str());
   otaInProgress = true;
   lcdShowOta(0);
+  oledShowOta(0);
   mqtt.publish("greenhouse/ota/status", "{\"status\":\"starting\"}");
 
   // Uses its own TLS client — kept insecure to match the MQTT connection
@@ -569,6 +711,7 @@ void handleRemoteOta(const String& url, const String& version) {
   httpUpdate.onProgress([](int cur, int total) {
     int pct = total > 0 ? (cur * 100) / total : 0;
     lcdShowOta(pct);
+    oledShowOta(pct);
   });
 
   t_httpUpdate_return ret = httpUpdate.update(otaClient, url);
@@ -656,8 +799,9 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       const char* mode = doc["mode"] | "";
       if (strcmp(mode, "auto") == 0 || strcmp(mode, "on") == 0 || strcmp(mode, "off") == 0) {
         fanMode = String(mode);
-        float temp = dhtIn.readTemperature();
-        float hum  = dhtIn.readHumidity();
+        sensors_event_t shtHum, shtTemp;
+        float temp = sht4.getEvent(&shtHum, &shtTemp) ? shtTemp.temperature : NAN;
+        float hum  = shtHum.relative_humidity;
         evaluateClimate(temp, hum);
         publishClimateStatus(temp, hum);
       }
@@ -674,8 +818,9 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       if (doc.containsKey("hum_high"))  climateHumHigh = doc["hum_high"].as<float>();
       if (doc.containsKey("hum_low"))   climateHumLow  = doc["hum_low"].as<float>();
       saveClimatePrefs();
-      float temp = dhtIn.readTemperature();
-      float hum  = dhtIn.readHumidity();
+      sensors_event_t shtHum, shtTemp;
+      float temp = sht4.getEvent(&shtHum, &shtTemp) ? shtTemp.temperature : NAN;
+      float hum  = shtHum.relative_humidity;
       evaluateClimate(temp, hum);
       publishClimateStatus(temp, hum);
     }
@@ -758,6 +903,13 @@ void setup() {
   lcd.backlight();
   lcdShowBoot();
 
+  // OLED
+  if (display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+    oledShowBoot();
+  } else {
+    Serial.println("[OLED] SSD1306 not found — skipping OLED");
+  }
+
   for (int i = 0; i < 3; i++) {
     pinMode(zonePins[i], OUTPUT);
     digitalWrite(zonePins[i], RELAY_OFF);
@@ -765,7 +917,9 @@ void setup() {
   pinMode(RELAY_FAN, OUTPUT);
   pinMode(RELAY_LIGHT, OUTPUT);
 
-  dhtIn.begin();
+  sht4.begin();
+  sht4.setPrecision(SHT4X_HIGH_PRECISION);
+  sht4.setHeater(SHT4X_NO_HEATER);
   dhtOut.begin();
 
   loadClimatePrefs();
@@ -821,11 +975,16 @@ void loop() {
   // ── LCD update (non-blocking) ──
   updateLcd(now);
 
+  // ── OLED update (non-blocking) ──
+  updateDisplay(now);
+
   // ── Sensor publish (only when MQTT connected) ──
   if (mqtt.connected() && now - lastSensorPublish > SENSOR_INTERVAL_MS) {
     lastSensorPublish = now;
-    float tempIn  = dhtIn.readTemperature();
-    float humIn   = dhtIn.readHumidity();
+    sensors_event_t shtHum, shtTemp;
+    bool shtOk = sht4.getEvent(&shtHum, &shtTemp);
+    float tempIn  = shtOk ? shtTemp.temperature : NAN;
+    float humIn   = shtOk ? shtHum.relative_humidity : NAN;
     float tempOut = dhtOut.readTemperature();
     float humOut  = dhtOut.readHumidity();
     Serial.printf("DHT Published %.1f In  %.1f hum In %.1f Out  %.1f hum out\n", tempIn, humIn, tempOut, humOut);

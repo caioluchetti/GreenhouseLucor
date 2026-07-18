@@ -17,15 +17,17 @@ from models import (
     IrrigationStatus, ZoneNameUpdate, ZoneNameResponse,
     ClimateRuleUpdate, ClimateRuleResponse, ClimateStatus, LightState,
     SensorHistoryPoint, SensorHistoryResponse, CameraStatusResponse,
-    FirmwareUploadResponse, FirmwareDeployResponse, FirmwareStatusResponse
+    FirmwareUploadResponse, FirmwareDeployResponse, FirmwareStatusResponse,
+    LoginRequest, TokenResponse, SetPasswordRequest, AuthStatusResponse
 
 )
 from database import (
-    SessionLocal, ScheduleRow, ZoneNameRow, ClimateRuleRow, LightStateRow, SensorHistoryRow, get_db
+    SessionLocal, ScheduleRow, ZoneNameRow, ClimateRuleRow, LightStateRow, SensorHistoryRow, get_db, AuthConfigRow
 )
 from mqtt_client import MockMQTT, RealMQTT
 from scheduler import Scheduler
 from sqlalchemy.orm import Session
+from auth import get_current_user, verify_password, create_access_token, verify_token, hash_password, ensure_default_password, _get_config_value, _set_config_value
 
 MODE = os.environ.get("MQTT_MODE", "mock")
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "data", "captures")
@@ -172,6 +174,7 @@ def _publish_schedule_sync():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global mqtt, scheduler, _history_running, _camera_stream_running
+    ensure_default_password()
     print(f"[MQTT] Modo: {MODE}")
     if MODE == "real":
         broker = os.environ.get("MQTT_BROKER", "localhost")
@@ -217,6 +220,30 @@ async def get_status():
     return StatusResponse(esp="online" if mqtt.is_esp_online() else "offline")
 
 
+@app.post("/api/auth/login", response_model=TokenResponse)
+async def login(data: LoginRequest):
+    hashed = _get_config_value("hashed_password")
+    if not hashed or not verify_password(data.password, hashed):
+        raise HTTPException(status_code=401, detail="Senha incorreta")
+    return TokenResponse(access_token=create_access_token())
+
+
+@app.get("/api/auth/verify", response_model=AuthStatusResponse)
+async def verify_auth(user: str = Depends(get_current_user)):
+    return AuthStatusResponse(authenticated=True)
+
+
+@app.put("/api/auth/set-password")
+async def set_password(data: SetPasswordRequest, user: str = Depends(get_current_user)):
+    hashed = _get_config_value("hashed_password")
+    if not hashed or not verify_password(data.current_password, hashed):
+        raise HTTPException(status_code=401, detail="Senha atual incorreta")
+    if len(data.new_password) < 3:
+        raise HTTPException(status_code=400, detail="Nova senha deve ter pelo menos 3 caracteres")
+    _set_config_value("hashed_password", hash_password(data.new_password))
+    return {"status": "ok", "message": "Senha alterada com sucesso"}
+
+
 @app.get("/api/zones")
 async def get_zones():
     zones = mqtt.get_zones()
@@ -224,7 +251,7 @@ async def get_zones():
 
 
 @app.post("/api/zones/{zone_id}/{action}")
-async def control_zone(zone_id: int, action: str):
+async def control_zone(zone_id: int, action: str, user: str = Depends(get_current_user)):
     if zone_id not in [1, 2, 3]:
         raise HTTPException(status_code=400, detail="Zona inválida (1-3)")
     if action.upper() not in ["ON", "OFF"]:
@@ -240,7 +267,7 @@ async def get_zone_names(db: Session = Depends(get_db)):
 
 
 @app.put("/api/zones/{zone_id}/name", response_model=ZoneNameResponse)
-async def update_zone_name(zone_id: int, data: ZoneNameUpdate, db: Session = Depends(get_db)):
+async def update_zone_name(zone_id: int, data: ZoneNameUpdate, db: Session = Depends(get_db), user: str = Depends(get_current_user)):
     if zone_id not in [1, 2, 3]:
         raise HTTPException(status_code=400, detail="Zona inválida (1-3)")
     row = db.query(ZoneNameRow).filter(ZoneNameRow.zone_id == zone_id).first()
@@ -284,7 +311,7 @@ async def list_schedules(db: Session = Depends(get_db)):
 
 
 @app.post("/api/schedules", response_model=ScheduleResponse)
-async def create_schedule(data: ScheduleCreate, db: Session = Depends(get_db)):
+async def create_schedule(data: ScheduleCreate, db: Session = Depends(get_db), user: str = Depends(get_current_user)):
     if data.target_type not in ("zone", "light"):
         raise HTTPException(status_code=400, detail="target_type inválido (zone|light)")
     if data.target_type == "zone" and data.zone_id not in [1, 2, 3]:
@@ -306,7 +333,7 @@ async def create_schedule(data: ScheduleCreate, db: Session = Depends(get_db)):
 
 
 @app.put("/api/schedules/{schedule_id}", response_model=ScheduleResponse)
-async def update_schedule(schedule_id: int, data: ScheduleUpdate, db: Session = Depends(get_db)):
+async def update_schedule(schedule_id: int, data: ScheduleUpdate, db: Session = Depends(get_db), user: str = Depends(get_current_user)):
     row = db.query(ScheduleRow).filter(ScheduleRow.id == schedule_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Schedule não encontrado")
@@ -335,7 +362,7 @@ async def update_schedule(schedule_id: int, data: ScheduleUpdate, db: Session = 
 
 
 @app.delete("/api/schedules/{schedule_id}")
-async def delete_schedule(schedule_id: int, db: Session = Depends(get_db)):
+async def delete_schedule(schedule_id: int, db: Session = Depends(get_db), user: str = Depends(get_current_user)):
     row = db.query(ScheduleRow).filter(ScheduleRow.id == schedule_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Schedule não encontrado")
@@ -364,7 +391,7 @@ async def get_climate_rules(db: Session = Depends(get_db)):
 
 
 @app.put("/api/climate/rules", response_model=ClimateRuleResponse)
-async def update_climate_rules(data: ClimateRuleUpdate, db: Session = Depends(get_db)):
+async def update_climate_rules(data: ClimateRuleUpdate, db: Session = Depends(get_db), user: str = Depends(get_current_user)):
     row = db.query(ClimateRuleRow).first()
     if not row:
         row = ClimateRuleRow()
@@ -393,7 +420,7 @@ async def update_climate_rules(data: ClimateRuleUpdate, db: Session = Depends(ge
 
 
 @app.post("/api/climate/fan/{mode}")
-async def set_fan_mode(mode: str):
+async def set_fan_mode(mode: str, user: str = Depends(get_current_user)):
     if mode not in ("auto", "on", "off"):
         raise HTTPException(status_code=400, detail="Modo inválido (auto|on|off)")
     db = SessionLocal()
@@ -425,7 +452,7 @@ async def get_climate_status():
 # ────────────────────────────────────────────────
 
 @app.post("/api/light/{state}")
-async def set_light(state: str):
+async def set_light(state: str, user: str = Depends(get_current_user)):
     if state.upper() not in ("ON", "OFF"):
         raise HTTPException(status_code=400, detail="Estado inválido (ON|OFF)")
     mqtt.publish("greenhouse/light/cmd", state.upper())
@@ -476,7 +503,7 @@ async def get_sensor_history(period: str = "24h", db: Session = Depends(get_db))
 
 
 @app.delete("/api/sensors/history")
-async def clear_sensor_history(db: Session = Depends(get_db)):
+async def clear_sensor_history(db: Session = Depends(get_db), user: str = Depends(get_current_user)):
     deleted = db.query(SensorHistoryRow).delete()
     db.commit()
     return {"status": "deleted", "count": deleted}
@@ -496,7 +523,7 @@ async def camera_status():
     return CameraStatusResponse(**status)
 
 @app.post("/api/camera/capture")
-async def camera_capture():
+async def camera_capture(user: str = Depends(get_current_user)):
     mqtt.publish("greenhouse/camera/fixed/capture", "1")
     return {"status": "ok", "message": "Capture command sent"}
 
@@ -578,7 +605,7 @@ OTA_TOPICS = {
 }
 
 @app.post("/api/firmware/upload", response_model=FirmwareUploadResponse)
-async def upload_firmware(version: str, device: str = "greenhouse", file: UploadFile = File(...)):
+async def upload_firmware(version: str, device: str = "greenhouse", file: UploadFile = File(...), user: str = Depends(get_current_user)):
     if device not in OTA_TOPICS:
         raise HTTPException(status_code=400, detail="device inválido (greenhouse|camera)")
     if not file.filename.endswith(".bin"):
@@ -591,7 +618,7 @@ async def upload_firmware(version: str, device: str = "greenhouse", file: Upload
 
 
 @app.post("/api/firmware/deploy", response_model=FirmwareDeployResponse)
-async def deploy_firmware(filename: str, version: str, device: str = "greenhouse"):
+async def deploy_firmware(filename: str, version: str, device: str = "greenhouse", user: str = Depends(get_current_user)):
     if device not in OTA_TOPICS:
         raise HTTPException(status_code=400, detail="device inválido (greenhouse|camera)")
     filepath = os.path.join(FIRMWARE_DIR, filename)

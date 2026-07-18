@@ -1,4 +1,4 @@
-export default function StatusBar({ espStatus, serverTime, theme, onToggleTheme }) {
+export default function StatusBar({ espStatus, serverTime, theme, onToggleTheme, isAuthenticated, onLoginClick, onLogout, onChangePassword }) {
   const online = espStatus === 'online'
 
   return (
@@ -9,7 +9,7 @@ export default function StatusBar({ espStatus, serverTime, theme, onToggleTheme 
           <h1 className="font-bold tracking-wider text-base sp-text-gradient">TATUFA</h1>
         </div>
 
-        <div className="flex items-center gap-5 text-xs">
+        <div className="flex items-center gap-3 sm:gap-5 text-xs">
           <button
             onClick={onToggleTheme}
             className="p-1.5 rounded-lg hover:bg-(--sp-surface-raised-hover) transition-colors cursor-pointer"
@@ -26,6 +26,30 @@ export default function StatusBar({ espStatus, serverTime, theme, onToggleTheme 
             )}
           </button>
 
+          {isAuthenticated ? (
+            <>
+              <button
+                onClick={onChangePassword}
+                className="hidden sm:inline px-2.5 py-1 rounded-lg text-xs font-medium text-(--sp-text-dim) border border-(--sp-border-subtle) hover:border-(--sp-accent-border) hover:text-(--sp-accent) transition-all"
+              >
+                Senha
+              </button>
+              <button
+                onClick={onLogout}
+                className="px-2.5 py-1 rounded-lg text-xs font-medium text-(--sp-text-muted) border border-(--sp-border-subtle) hover:border-red-500/30 hover:text-red-400 transition-all"
+              >
+                Sair
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={onLoginClick}
+              className="px-2.5 py-1 rounded-lg text-xs font-medium text-(--sp-accent) border border-(--sp-accent-border) hover:bg-(--sp-accent-bg) transition-all"
+            >
+              Login
+            </button>
+          )}
+
           <div className="flex items-center gap-2">
             <span className="relative flex h-2.5 w-2.5">
               {online && (
@@ -35,7 +59,7 @@ export default function StatusBar({ espStatus, serverTime, theme, onToggleTheme 
                 online ? 'bg-emerald-400 shadow-[0_0_8px_rgba(74,222,128,0.6)]' : 'bg-red-400/60'
               }`} />
             </span>
-            <span className="text-(--sp-text-dim)">
+            <span className="text-(--sp-text-dim) hidden sm:inline">
               ESP32{' '}
               <span className={online ? 'text-(--sp-accent) font-medium' : 'text-(--sp-danger-dim)'}>
                 {espStatus}

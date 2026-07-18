@@ -3,8 +3,10 @@ import { useState } from 'react'
 export default function LightCard({ state, onToggle }) {
   const [animating, setAnimating] = useState(false)
   const isOn = state === 'on'
+  const isGuest = !onToggle
 
   const handleToggle = () => {
+    if (isGuest) return
     setAnimating(true)
     onToggle()
     setTimeout(() => setAnimating(false), 700)
@@ -48,16 +50,16 @@ export default function LightCard({ state, onToggle }) {
       {isOn ? (
         <button
           onClick={handleToggle}
-          disabled={animating}
-          className="mt-1.5 w-full py-1 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-semibold text-red-400 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-all uppercase tracking-wide"
+          disabled={animating || isGuest}
+          className="mt-1.5 w-full py-1 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-semibold text-red-400 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-all uppercase tracking-wide disabled:opacity-30 disabled:cursor-not-allowed"
         >
           Desligar
         </button>
       ) : (
         <button
           onClick={handleToggle}
-          disabled={animating}
-          className="mt-2 sm:mt-3 w-full py-1.5 sm:py-2 rounded-lg text-[10px] sm:text-xs font-semibold uppercase tracking-wide transition-all duration-300 bg-(--sp-surface-raised) text-(--sp-text-muted) border border-(--sp-border-subtle) hover:bg-amber-500/10 hover:text-amber-300 hover:border-amber-400/30"
+          disabled={animating || isGuest}
+          className="mt-2 sm:mt-3 w-full py-1.5 sm:py-2 rounded-lg text-[10px] sm:text-xs font-semibold uppercase tracking-wide transition-all duration-300 bg-(--sp-surface-raised) text-(--sp-text-muted) border border-(--sp-border-subtle) hover:bg-amber-500/10 hover:text-amber-300 hover:border-amber-400/30 disabled:opacity-30 disabled:cursor-not-allowed"
         >
           {animating ? '⌛' : 'Ligar'}
         </button>

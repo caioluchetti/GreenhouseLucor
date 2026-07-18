@@ -114,3 +114,21 @@ class FirmwareStatusResponse(BaseModel):
     error: Optional[str] = None
     rebooting: Optional[bool] = None
     current_version: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class SetPasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class AuthStatusResponse(BaseModel):
+    authenticated: bool
