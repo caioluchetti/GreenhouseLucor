@@ -11,7 +11,8 @@
  *       CH6-CH8 = spare (not wired)
  *   - SHT40: temperature + humidity inside (I2C 0x44)
  *   - DHT22: temperature + humidity outside (GPIO 32)
- *   - LCD 16x2 with I2C backpack (address 0x27, GPIO 21=SDA, GPIO 22=SCL)
+ *   - LCD 16x2 with I2C backpack (address 0x27, GPIO 14=SDA, GPIO 27=SCL)
+ *   - OLED SSD1306 128x64 (address 0x3C, GPIO 21=SDA, GPIO 22=SCL — separate Wire1 bus)
  *
  * Autonomous mode:
  *   - NTP time sync on boot + daily resync
@@ -152,6 +153,7 @@ WiFiClientSecure espClient;
 PubSubClient mqtt(espClient);
 Preferences prefs;
 WiFiManager wifiManager;   // NEW
+TwoWire Wire1(1);         // Second I2C bus for OLED on default pins
 
 const char* zoneStates[3] = {"OFF", "OFF", "OFF"};
 const int   zonePins[3]   = {RELAY_Z1, RELAY_Z2, RELAY_Z3};
@@ -212,7 +214,7 @@ float lcdHumOut  = NAN;
 bool otaInProgress = false;
 
 // ── OLED ────────────────────────────────────────────────────
-Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
+Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire1, OLED_RESET);
 unsigned long lastOledRefresh = 0;
 const unsigned long OLED_REFRESH_MS = 500;
 
@@ -865,30 +867,32 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 }
 
 void reconnectMQTT() {
-  while (!mqtt.connected()) {
-    Serial.print("MQTT connect...");
-    if (mqtt.connect(MQTT_CLIENT)) {
-      Serial.println(" OK");
-      mqtt.subscribe("greenhouse/zone1/command");
-      mqtt.subscribe("greenhouse/zone2/command");
-      mqtt.subscribe("greenhouse/zone3/command");
-      mqtt.subscribe("greenhouse/light/cmd");
-      mqtt.subscribe("greenhouse/climate/fan/cmd");
-      mqtt.subscribe("greenhouse/climate/thresholds");
-      mqtt.subscribe("greenhouse/schedules/sync");
-      mqtt.subscribe("greenhouse/ota/update");           // NEW
-      mqtt.publish("greenhouse/climate/request", "{}");
-      mqtt.publish("greenhouse/schedules/request", "{}");
-      char verBuf[48];
-      snprintf(verBuf, sizeof(verBuf), "{\"version\":\"%s\"}", FW_VERSION);  // NEW
-      mqtt.publish("greenhouse/firmware/version", verBuf);                   // NEW
-      Serial.println("[MQTT] Reconnected — requested sync");
-    } else {
-      Serial.print("failed rc=");
-      Serial.print(mqtt.state());
-      Serial.println(" retry in 2s");
-      delay(2000);
-    }
+  static unsigned long lastAttempt = 0;
+  unsigned long now = millis();
+  if (now - lastAttempt < 2000) return;
+  lastAttempt = now;
+
+  Serial.print("MQTT connect...");
+  if (mqtt.connect(MQTT_CLIENT)) {
+    Serial.println(" OK");
+    mqtt.subscribe("greenhouse/zone1/command");
+    mqtt.subscribe("greenhouse/zone2/command");
+    mqtt.subscribe("greenhouse/zone3/command");
+    mqtt.subscribe("greenhouse/light/cmd");
+    mqtt.subscribe("greenhouse/climate/fan/cmd");
+    mqtt.subscribe("greenhouse/climate/thresholds");
+    mqtt.subscribe("greenhouse/schedules/sync");
+    mqtt.subscribe("greenhouse/ota/update");
+    mqtt.publish("greenhouse/climate/request", "{}");
+    mqtt.publish("greenhouse/schedules/request", "{}");
+    char verBuf[48];
+    snprintf(verBuf, sizeof(verBuf), "{\"version\":\"%s\"}", FW_VERSION);
+    mqtt.publish("greenhouse/firmware/version", verBuf);
+    Serial.println("[MQTT] Reconnected — requested sync");
+  } else {
+    Serial.print("failed rc=");
+    Serial.print(mqtt.state());
+    Serial.println(" (retry in 2s)");
   }
 }
 
@@ -897,13 +901,17 @@ void setup() {
   Serial.begin(115200);
   delay(50);
 
-  // LCD
+  // LCD + SHT40 I2C bus
   Wire.begin(LCD_SDA, LCD_SCL);
+  Wire.setClock(400000);
   lcd.init();
   lcd.backlight();
   lcdShowBoot();
 
-  // OLED
+  // OLED I2C bus (separate, on default GPIO 21/22)
+  Wire1.begin(21, 22);
+  Wire1.setClock(400000);
+
   if (display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
     oledShowBoot();
   } else {
@@ -978,8 +986,8 @@ void loop() {
   // ── OLED update (non-blocking) ──
   updateDisplay(now);
 
-  // ── Sensor publish (only when MQTT connected) ──
-  if (mqtt.connected() && now - lastSensorPublish > SENSOR_INTERVAL_MS) {
+  // ── Sensor read (always, independent of MQTT) ──
+  if (now - lastSensorPublish > SENSOR_INTERVAL_MS) {
     lastSensorPublish = now;
     sensors_event_t shtHum, shtTemp;
     bool shtOk = sht4.getEvent(&shtHum, &shtTemp);
@@ -987,28 +995,33 @@ void loop() {
     float humIn   = shtOk ? shtHum.relative_humidity : NAN;
     float tempOut = dhtOut.readTemperature();
     float humOut  = dhtOut.readHumidity();
-    Serial.printf("DHT Published %.1f In  %.1f hum In %.1f Out  %.1f hum out\n", tempIn, humIn, tempOut, humOut);
-    // Cache for LCD display
+    Serial.printf("Sensors — In: %.1fC %.1f%%  Out: %.1fC %.1f%%\n", tempIn, humIn, tempOut, humOut);
+
+    // Cache for LCD + OLED display
     lcdTempIn  = tempIn;
     lcdHumIn   = humIn;
     lcdTempOut = tempOut;
     lcdHumOut  = humOut;
 
-    char buf[16];
-    if (!isnan(tempIn))  { dtostrf(tempIn, 4, 1, buf); mqtt.publish("greenhouse/sensor/inside/temperature", buf); }
-    if (!isnan(humIn))   { dtostrf(humIn,  4, 1, buf); mqtt.publish("greenhouse/sensor/inside/humidity",    buf); }
-    if (!isnan(tempOut)) { dtostrf(tempOut, 4, 1, buf); mqtt.publish("greenhouse/sensor/outside/temperature", buf); }
-    if (!isnan(humOut))  { dtostrf(humOut,  4, 1, buf); mqtt.publish("greenhouse/sensor/outside/humidity",    buf); }
-
     evaluateClimate(tempIn, humIn);
-    publishClimateStatus(tempIn, humIn);
 
-    for (int i = 0; i < 3; i++) {
-      char topic[64];
-      snprintf(topic, sizeof(topic), "greenhouse/zone%d/state", i + 1);
-      mqtt.publish(topic, zoneStates[i]);
+    // Publish sensors (only when MQTT is connected)
+    if (mqtt.connected()) {
+      char buf[16];
+      if (!isnan(tempIn))  { dtostrf(tempIn, 4, 1, buf); mqtt.publish("greenhouse/sensor/inside/temperature", buf); }
+      if (!isnan(humIn))   { dtostrf(humIn,  4, 1, buf); mqtt.publish("greenhouse/sensor/inside/humidity",    buf); }
+      if (!isnan(tempOut)) { dtostrf(tempOut, 4, 1, buf); mqtt.publish("greenhouse/sensor/outside/temperature", buf); }
+      if (!isnan(humOut))  { dtostrf(humOut,  4, 1, buf); mqtt.publish("greenhouse/sensor/outside/humidity",    buf); }
+
+      publishClimateStatus(tempIn, humIn);
+
+      for (int i = 0; i < 3; i++) {
+        char topic[64];
+        snprintf(topic, sizeof(topic), "greenhouse/zone%d/state", i + 1);
+        mqtt.publish(topic, zoneStates[i]);
+      }
+      publishLightStatus();
+      mqtt.publish("greenhouse/status", "online");
     }
-    publishLightStatus();
-    mqtt.publish("greenhouse/status", "online");
   }
 }
