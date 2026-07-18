@@ -27,7 +27,7 @@ export default function CameraFeed({ cameraUrl }) {
 
   return (
     <div className="sp-glass overflow-hidden h-full flex flex-col">
-      <div className="relative w-full" style={{ paddingBottom: '56.25%' }}>
+      <div className="relative w-full" style={{ paddingBottom: '75%' }}>
         {loadError ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-(--sp-surface)">
             <svg className="w-8 h-8 text-(--sp-text-muted)" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -41,7 +41,7 @@ export default function CameraFeed({ cameraUrl }) {
           <img
             src={cameraUrl}
             alt="Câmera da estufa"
-            className="absolute inset-0 w-full h-full object-cover"
+            className="absolute inset-0 w-full h-full object-contain"
             onError={() => setLoadError(true)}
             onLoad={() => { setConnected(true); setLoadError(false) }}
           />
