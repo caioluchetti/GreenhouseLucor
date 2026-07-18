@@ -153,7 +153,6 @@ WiFiClientSecure espClient;
 PubSubClient mqtt(espClient);
 Preferences prefs;
 WiFiManager wifiManager;   // NEW
-TwoWire Wire1(1);         // Second I2C bus for OLED on default pins
 
 const char* zoneStates[3] = {"OFF", "OFF", "OFF"};
 const int   zonePins[3]   = {RELAY_Z1, RELAY_Z2, RELAY_Z3};
