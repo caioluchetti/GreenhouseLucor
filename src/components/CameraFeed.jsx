@@ -41,7 +41,7 @@ export default function CameraFeed({ cameraUrl }) {
           <img
             src={cameraUrl}
             alt="Câmera da estufa"
-            className="absolute inset-0 w-full h-full object-contain"
+            className="absolute inset-0 w-full h-full object-contain scale-x-[-1]"
             onError={() => setLoadError(true)}
             onLoad={() => { setConnected(true); setLoadError(false) }}
           />
