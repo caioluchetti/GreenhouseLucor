@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, Response
 from contextlib import asynccontextmanager
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -500,6 +500,51 @@ async def get_sensor_history(period: str = "24h", db: Session = Depends(get_db))
                 result[r.source].append({"metric": r.metric, "points": [point]})
 
     return result
+
+
+@app.get("/api/sensors/history/csv")
+async def get_sensor_history_csv(period: str = "24h", db: Session = Depends(get_db)):
+    import csv
+    import io
+    from datetime import timedelta
+
+    if period == "all":
+        rows = db.query(SensorHistoryRow).order_by(
+            SensorHistoryRow.recorded_at.asc()
+        ).all()
+    else:
+        hours = {"1h": 1, "24h": 24, "7d": 168, "30d": 720}.get(period, 24)
+        cutoff = (datetime.now(ZoneInfo("America/Sao_Paulo")) - timedelta(hours=hours)).isoformat()
+        rows = db.query(SensorHistoryRow).filter(
+            SensorHistoryRow.recorded_at >= cutoff
+        ).order_by(SensorHistoryRow.recorded_at.asc()).all()
+
+    col_keys = [
+        "inside_temperature", "inside_humidity",
+        "outside_temperature", "outside_humidity",
+    ]
+    pivot = {}
+    for r in rows:
+        ts = r.recorded_at
+        if ts not in pivot:
+            pivot[ts] = {}
+        pivot[ts][f"{r.source}_{r.metric}"] = r.value
+
+    buf = io.StringIO()
+    buf.write("\ufeff")
+    writer = csv.writer(buf, delimiter=";")
+    writer.writerow(["timestamp"] + col_keys)
+    for ts in sorted(pivot.keys()):
+        row = pivot[ts]
+        writer.writerow([ts] + [row.get(k, "") for k in col_keys])
+
+    stamp = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y%m%d_%H%M")
+    filename = f"sensores_{period}_{stamp}.csv"
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.delete("/api/sensors/history")

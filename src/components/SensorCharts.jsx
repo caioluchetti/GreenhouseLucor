@@ -21,7 +21,7 @@ const PERIODS = [
   { key: '30d', label: '30 dias' },
 ]
 
-export default function SensorCharts({ history, onPeriodChange, period, onClearHistory, isGuest }) {
+export default function SensorCharts({ history, onPeriodChange, period, onClearHistory, isGuest, api = 'api' }) {
   const [showConfirm, setShowConfirm] = useState(false)
   const tempData = buildTempDataset(history)
   const humData = buildHumidityDataset(history)
@@ -58,14 +58,30 @@ export default function SensorCharts({ history, onPeriodChange, period, onClearH
             </button>
           ))}
         </div>
-        {!isGuest && (
-          <button
-            onClick={() => setShowConfirm(true)}
-            className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-all"
+        <div className="flex gap-2 flex-wrap">
+          <a
+            href={`${api}/sensors/history/csv?period=${period}`}
+            download
+            className="px-3 py-1.5 rounded-lg text-xs font-medium sp-btn-secondary"
           >
-            Limpar histórico
-          </button>
-        )}
+            ⬇ Baixar CSV
+          </a>
+          <a
+            href={`${api}/sensors/history/csv?period=all`}
+            download
+            className="px-3 py-1.5 rounded-lg text-xs font-medium sp-btn-secondary"
+          >
+            ⬇ Baixar tudo
+          </a>
+          {!isGuest && (
+            <button
+              onClick={() => setShowConfirm(true)}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-all"
+            >
+              Limpar histórico
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="sp-glass p-5">

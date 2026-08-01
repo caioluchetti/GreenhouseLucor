@@ -423,6 +423,7 @@ export default function App() {
                 onPeriodChange={handlePeriodChange}
                 onClearHistory={handleClearHistory}
                 isGuest={guest}
+                api={API}
               />
             ) : tab === 'firmware' ? (
               <FirmwarePanel api={API} authHeaders={authHeaders} />
