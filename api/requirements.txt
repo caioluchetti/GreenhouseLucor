@@ -6,3 +6,6 @@ pydantic
 python-multipart
 python-jose[cryptography]
 bcrypt
+google-api-python-client
+google-auth
+google-auth-oauthlib

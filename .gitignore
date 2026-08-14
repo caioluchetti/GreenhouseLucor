@@ -11,6 +11,8 @@ api/data/
 *.log
 .vite-temp/
 dist.old/
-
+greenhouse-photos-25cb621f41fa.json
+client_secret_432146247142-enui3hf8h39mls1cnr7obks5rb5epu2c.apps.googleusercontent.com.json
+google-drive-token.json
 # PlatformIO build intermediates (the committed build/ folders hold the flashable artifacts)
 .pio/

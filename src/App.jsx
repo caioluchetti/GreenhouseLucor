@@ -38,6 +38,7 @@ export default function App() {
   const [climateRules, setClimateRules] = useState(null)
   const [climateStatus, setClimateStatus] = useState(null)
   const [light, setLight] = useState({ state: 'off' })
+  const [cameraSchedule, setCameraSchedule] = useState(null)
   const [sensorHistory, setSensorHistory] = useState(null)
   const [chartPeriod, setChartPeriod] = useState('24h')
   const [cameraUrl] = useState(() => `${API}/camera/proxy`)
@@ -135,14 +136,16 @@ export default function App() {
 
   const fetchClimate = useCallback(async () => {
     try {
-      const [rulesRes, statusRes, lightRes] = await Promise.all([
+      const [rulesRes, statusRes, lightRes, cameraScheduleRes] = await Promise.all([
         fetch(`${API}/climate/rules`),
         fetch(`${API}/climate/status`),
-        fetch(`${API}/light/status`)
+        fetch(`${API}/light/status`),
+        fetch(`${API}/camera/schedule`)
       ])
       if (rulesRes.ok) setClimateRules(await rulesRes.json())
       if (statusRes.ok) setClimateStatus(await statusRes.json())
       if (lightRes.ok) setLight(await lightRes.json())
+      if (cameraScheduleRes.ok) setCameraSchedule(await cameraScheduleRes.json())
     } catch (err) {
       console.error('Climate fetch error:', err)
     }
@@ -297,6 +300,20 @@ export default function App() {
     fetchClimate()
   }
 
+  const updateCameraSchedule = async (data) => {
+    const res = await fetch(`${API}/camera/schedule`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(data)
+    })
+    if (res.ok) {
+      setCameraSchedule(await res.json())
+      return
+    }
+    const error = await res.json()
+    throw new Error(error.detail || 'Erro ao salvar horários')
+  }
+
   const toggleTheme = () => {
     setTheme(prev => prev === 'dark' ? 'light' : 'dark')
   }
@@ -433,6 +450,8 @@ export default function App() {
                 climateStatus={climateStatus}
                 onRuleUpdate={updateClimateRules}
                 onFanModeSet={setFanMode}
+                cameraSchedule={cameraSchedule}
+                onCameraScheduleUpdate={updateCameraSchedule}
               />
             )}
           </div>

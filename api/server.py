@@ -18,11 +18,12 @@ from models import (
     ClimateRuleUpdate, ClimateRuleResponse, ClimateStatus, LightState,
     SensorHistoryPoint, SensorHistoryResponse, CameraStatusResponse,
     FirmwareUploadResponse, FirmwareDeployResponse, FirmwareStatusResponse,
+    CameraScheduleUpdate, CameraScheduleResponse,
     LoginRequest, TokenResponse, SetPasswordRequest, AuthStatusResponse
 
 )
 from database import (
-    SessionLocal, ScheduleRow, ZoneNameRow, ClimateRuleRow, LightStateRow, SensorHistoryRow, get_db, AuthConfigRow
+    SessionLocal, ScheduleRow, ZoneNameRow, ClimateRuleRow, LightStateRow, CameraScheduleRow, SensorHistoryRow, get_db, AuthConfigRow
 )
 from mqtt_client import MockMQTT, RealMQTT
 from scheduler import Scheduler
@@ -31,13 +32,17 @@ from auth import get_current_user, verify_password, create_access_token, verify_
 
 MODE = os.environ.get("MQTT_MODE", "mock")
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "data", "captures")
+INTERVAL_UPLOAD_DIR = os.path.join(UPLOAD_DIR, "interval")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(INTERVAL_UPLOAD_DIR, exist_ok=True)
 
 mqt = None
 mqtt = None
 scheduler = None
 _history_running = True
 _camera_stream_running = True
+_camera_capture_running = True
+_drive_upload_running = True
 
 _latest_frame: bytes | None = None
 _last_frame_time: float = 0.0
@@ -97,6 +102,136 @@ def _camera_stream_loop():
         except Exception as e:
             print(f"[Camera Stream] Connection error: {e} — retrying in 2s")
             time.sleep(2)
+
+
+def _camera_capture_loop():
+    """Save one recent camera frame at each configured daily time."""
+    global _camera_capture_running
+    captured_slots = set()
+    interval_captured_slots = set()
+
+    while _camera_capture_running:
+        now = datetime.now(ZoneInfo("America/Sao_Paulo"))
+        slot = f"{now:%Y-%m-%d} {now:%H:%M}"
+        db = SessionLocal()
+        try:
+            schedule = db.query(CameraScheduleRow).first()
+            capture_times = {schedule.morning_time, schedule.afternoon_time} if schedule else {"09:00", "16:00"}
+        finally:
+            db.close()
+
+        if now.strftime("%H:%M") in capture_times and slot not in captured_slots:
+            frame = _latest_frame
+            frame_age = time.time() - _last_frame_time
+            if frame and frame_age <= 120:
+                timestamp = now.strftime("%Y%m%d_%H%M%S")
+                filename = f"camera_{timestamp}.jpg"
+                filepath = os.path.join(UPLOAD_DIR, filename)
+                try:
+                    with open(filepath, "wb") as image_file:
+                        image_file.write(frame)
+                    captured_slots.add(slot)
+                    print(f"[Camera Capture] Saved {filename}", flush=True)
+                except OSError as exc:
+                    print(f"[Camera Capture] Could not save {filename}: {exc}", flush=True)
+            else:
+                print("[Camera Capture] No recent frame available", flush=True)
+
+        minutes = now.hour * 60 + now.minute
+        interval_slot = f"{now:%Y-%m-%d} {now:%H:%M}"
+        is_interval_time = 330 <= minutes <= 1110 and now.minute in (0, 30)
+        if is_interval_time and interval_slot not in interval_captured_slots:
+            frame = _latest_frame
+            frame_age = time.time() - _last_frame_time
+            if frame and frame_age <= 120:
+                timestamp = now.strftime("%Y%m%d_%H%M%S")
+                filename = f"interval_{timestamp}.jpg"
+                filepath = os.path.join(INTERVAL_UPLOAD_DIR, filename)
+                try:
+                    with open(filepath, "wb") as image_file:
+                        image_file.write(frame)
+                    interval_captured_slots.add(interval_slot)
+                    print(f"[Camera Interval] Saved {filename}", flush=True)
+                except OSError as exc:
+                    print(f"[Camera Interval] Could not save {filename}: {exc}", flush=True)
+            else:
+                print("[Camera Interval] No recent frame available", flush=True)
+
+        # Keep the set bounded while retaining enough history to prevent duplicates.
+        if len(captured_slots) > 14:
+            captured_slots = {item for item in captured_slots if item >= f"{now:%Y-%m-%d} 00:00"}
+        if len(interval_captured_slots) > 60:
+            interval_captured_slots = {item for item in interval_captured_slots if item >= f"{now:%Y-%m-%d} 00:00"}
+        time.sleep(5)
+
+
+def _drive_upload_loop():
+    """Upload saved camera photos to the configured Google Drive folder."""
+    global _drive_upload_running
+    token_file = os.environ.get("GOOGLE_DRIVE_TOKEN", "/run/secrets/google-drive-token.json")
+    folder_id = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "1jRKgLSOn3UbpcbKn84WUrCrvQxpH3d3Y")
+    uploaded = set()
+    service = None
+
+    while _drive_upload_running:
+        try:
+            if service is None:
+                from google.auth.transport.requests import Request
+                from google.oauth2.credentials import Credentials
+                from googleapiclient.discovery import build
+
+                credentials = Credentials.from_authorized_user_file(
+                    token_file,
+                    ["https://www.googleapis.com/auth/drive"],
+                )
+                if credentials.expired and credentials.refresh_token:
+                    credentials.refresh(Request())
+                    with open(token_file, "w", encoding="utf-8") as token:
+                        token.write(credentials.to_json())
+                if not credentials.valid:
+                    raise RuntimeError("Google Drive OAuth token is invalid or expired")
+                service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+
+            capture_sources = [
+                (UPLOAD_DIR, "camera_"),
+                (INTERVAL_UPLOAD_DIR, "interval_"),
+            ]
+            for source_dir, filename_prefix in capture_sources:
+                for filename in sorted(os.listdir(source_dir)):
+                    if not filename.startswith(filename_prefix) or not filename.endswith(".jpg"):
+                        continue
+                    if filename in uploaded:
+                        continue
+
+                    filepath = os.path.join(source_dir, filename)
+                    if not os.path.isfile(filepath):
+                        continue
+
+                    query = (
+                        f"name = '{filename}' and '{folder_id}' in parents "
+                        "and trashed = false"
+                    )
+                    existing = service.files().list(
+                        q=query,
+                        spaces="drive",
+                        fields="files(id)",
+                        pageSize=1,
+                    ).execute().get("files", [])
+                    if not existing:
+                        from googleapiclient.http import MediaFileUpload
+
+                        service.files().create(
+                            body={"name": filename, "parents": [folder_id]},
+                            media_body=MediaFileUpload(filepath, mimetype="image/jpeg"),
+                            fields="id",
+                        ).execute()
+                        print(f"[Google Drive] Uploaded {filename}", flush=True)
+                    uploaded.add(filename)
+        except Exception as exc:
+            service = None
+            print(f"[Google Drive] Upload error: {exc} — retrying in 5m", flush=True)
+
+        time.sleep(300)
 
 
 def _sensor_history_loop():
@@ -173,7 +308,7 @@ def _publish_schedule_sync():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global mqtt, scheduler, _history_running, _camera_stream_running
+    global mqtt, scheduler, _history_running, _camera_stream_running, _camera_capture_running, _drive_upload_running
     ensure_default_password()
     print(f"[MQTT] Modo: {MODE}")
     if MODE == "real":
@@ -185,9 +320,13 @@ async def lifespan(app: FastAPI):
     scheduler = Scheduler(mqtt)
     threading.Thread(target=_sensor_history_loop, daemon=True).start()
     threading.Thread(target=_camera_stream_loop, daemon=True).start()
+    threading.Thread(target=_camera_capture_loop, daemon=True).start()
+    threading.Thread(target=_drive_upload_loop, daemon=True).start()
     yield
     _history_running = False
     _camera_stream_running = False
+    _camera_capture_running = False
+    _drive_upload_running = False
     mqtt.stop()
     scheduler.stop()
 
@@ -557,6 +696,39 @@ async def clear_sensor_history(db: Session = Depends(get_db), user: str = Depend
 # ────────────────────────────────────────────────
 # Camera
 # ────────────────────────────────────────────────
+
+@app.get("/api/camera/schedule", response_model=CameraScheduleResponse)
+async def get_camera_schedule(db: Session = Depends(get_db)):
+    row = db.query(CameraScheduleRow).first()
+    if not row:
+        row = CameraScheduleRow(morning_time="09:00", afternoon_time="16:00")
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+    return CameraScheduleResponse(morning_time=row.morning_time, afternoon_time=row.afternoon_time)
+
+
+@app.put("/api/camera/schedule", response_model=CameraScheduleResponse)
+async def update_camera_schedule(data: CameraScheduleUpdate, db: Session = Depends(get_db), user: str = Depends(get_current_user)):
+    for name, value in (("morning_time", data.morning_time), ("afternoon_time", data.afternoon_time)):
+        try:
+            parsed = datetime.strptime(value, "%H:%M")
+            if parsed.strftime("%H:%M") != value:
+                raise ValueError
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"{name} deve estar no formato HH:MM")
+    if data.morning_time == data.afternoon_time:
+        raise HTTPException(status_code=400, detail="Os horários das fotos devem ser diferentes")
+
+    row = db.query(CameraScheduleRow).first()
+    if not row:
+        row = CameraScheduleRow()
+        db.add(row)
+    row.morning_time = data.morning_time
+    row.afternoon_time = data.afternoon_time
+    db.commit()
+    db.refresh(row)
+    return CameraScheduleResponse(morning_time=row.morning_time, afternoon_time=row.afternoon_time)
 
 @app.get("/api/camera/status", response_model=CameraStatusResponse)
 async def camera_status():

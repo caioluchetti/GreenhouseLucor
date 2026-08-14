@@ -46,6 +46,13 @@ class LightStateRow(Base):
     state = Column(String, default="off")
 
 
+class CameraScheduleRow(Base):
+    __tablename__ = "camera_schedule"
+    id = Column(Integer, primary_key=True)
+    morning_time = Column(String, nullable=False, default="09:00")
+    afternoon_time = Column(String, nullable=False, default="16:00")
+
+
 class SensorHistoryRow(Base):
     __tablename__ = "sensor_history"
     id = Column(Integer, primary_key=True, index=True)
@@ -171,6 +178,16 @@ def ensure_default_light_state():
         db.close()
 
 
+def ensure_default_camera_schedule():
+    db = SessionLocal()
+    try:
+        if not db.query(CameraScheduleRow).first():
+            db.add(CameraScheduleRow(morning_time="09:00", afternoon_time="16:00"))
+            db.commit()
+    finally:
+        db.close()
+
+
 def cleanup_old_sensor_history(days=30):
     from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
@@ -190,6 +207,7 @@ _migrate_schedule_target_type()
 _migrate_schedule_nullable_zone_id()
 ensure_default_climate_rules()
 ensure_default_light_state()
+ensure_default_camera_schedule()
 cleanup_old_sensor_history()
 
 

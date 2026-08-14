@@ -92,6 +92,17 @@ class ClimateStatus(BaseModel):
 class LightState(BaseModel):
     state: str = "off"
 
+
+class CameraScheduleUpdate(BaseModel):
+    morning_time: str
+    afternoon_time: str
+
+
+class CameraScheduleResponse(BaseModel):
+    morning_time: str = "09:00"
+    afternoon_time: str = "16:00"
+
+
 class CameraStatusResponse(BaseModel):
     ip: str = ""
     capture: str = ""

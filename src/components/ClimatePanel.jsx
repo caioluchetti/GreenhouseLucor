@@ -1,9 +1,13 @@
 import { useState, useEffect } from 'react'
 
-export default function ClimatePanel({ climateRules, climateStatus, onRuleUpdate, onFanModeSet }) {
+export default function ClimatePanel({ climateRules, climateStatus, onRuleUpdate, onFanModeSet, cameraSchedule, onCameraScheduleUpdate }) {
   const [tempHigh, setTempHigh] = useState('')
   const [tempLow, setTempLow] = useState('')
   const [saving, setSaving] = useState(false)
+  const [morningTime, setMorningTime] = useState('09:00')
+  const [afternoonTime, setAfternoonTime] = useState('16:00')
+  const [cameraSaving, setCameraSaving] = useState(false)
+  const [cameraError, setCameraError] = useState('')
 
   useEffect(() => {
     if (climateRules) {
@@ -12,12 +16,27 @@ export default function ClimatePanel({ climateRules, climateStatus, onRuleUpdate
     }
   }, [climateRules])
 
+  useEffect(() => {
+    if (cameraSchedule) {
+      setMorningTime(cameraSchedule.morning_time || '09:00')
+      setAfternoonTime(cameraSchedule.afternoon_time || '16:00')
+    }
+  }, [cameraSchedule])
+
   const handleSave = () => {
     setSaving(true)
     onRuleUpdate({
       temp_high: tempHigh !== '' ? parseFloat(tempHigh) : null,
       temp_low: tempLow !== '' ? parseFloat(tempLow) : null
     }).finally(() => setSaving(false))
+  }
+
+  const handleCameraSave = () => {
+    setCameraSaving(true)
+    setCameraError('')
+    onCameraScheduleUpdate({ morning_time: morningTime, afternoon_time: afternoonTime })
+      .catch(error => setCameraError(error.message))
+      .finally(() => setCameraSaving(false))
   }
 
   const fanOn = climateStatus?.fan === 'on'
@@ -155,6 +174,29 @@ export default function ClimatePanel({ climateRules, climateStatus, onRuleUpdate
         <p className="text-[10px] text-(--sp-text-muted) mt-2">
           Diferença entre ligar/desligar = histerese (evita liga/desliga rápido).
         </p>
+      </div>
+
+      <div className="sp-glass p-5">
+        <h3 className="text-xs font-semibold text-(--sp-text-dim) mb-3 tracking-widest uppercase">
+          Fotos automáticas
+        </h3>
+        <p className="text-[10px] text-(--sp-text-muted) mb-4">
+          A câmera salva o frame mais recente nestes horários, no fuso de São Paulo.
+        </p>
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <div>
+            <label className="block text-[10px] text-(--sp-text-dim) mb-2 tracking-widest uppercase">Foto da manhã</label>
+            <input type="time" value={morningTime} onChange={e => setMorningTime(e.target.value)} className="sp-input w-full" />
+          </div>
+          <div>
+            <label className="block text-[10px] text-(--sp-text-dim) mb-2 tracking-widest uppercase">Foto da tarde</label>
+            <input type="time" value={afternoonTime} onChange={e => setAfternoonTime(e.target.value)} className="sp-input w-full" />
+          </div>
+        </div>
+        {cameraError && <p className="text-xs text-(--sp-danger) mb-3">{cameraError}</p>}
+        <button onClick={handleCameraSave} disabled={cameraSaving} className="sp-btn-primary w-full sm:w-auto">
+          {cameraSaving ? '⌛ Salvando...' : 'Salvar horários'}
+        </button>
       </div>
     </div>
   )
