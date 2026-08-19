@@ -189,6 +189,8 @@ export default function IlluminationPanel({ api, authHeaders }) {
         {photoUrl && <img src={photoUrl} alt={`Captura de ${selectedPhoto.label}`} className="w-full max-h-[560px] object-contain rounded-xl bg-black/20" />}
       </div>
 
+      <BrightnessChart series={data.series} selectedIndex={selectedIndex} />
+
       <div className="grid lg:grid-cols-2 gap-4">
         <article className="sp-glass-sm p-3">
           <div className="flex items-start justify-between gap-2 mb-3">
@@ -206,7 +208,6 @@ export default function IlluminationPanel({ api, authHeaders }) {
         </article>
       </div>
 
-      <BrightnessChart series={data.series} selectedIndex={selectedIndex} />
       {data.vegetation_mask && <details className="sp-glass-sm p-4">
         <summary className="cursor-pointer text-sm font-semibold text-(--sp-text)">Máscara automática de plantas ({(data.vegetation_coverage * 100).toFixed(1)}% da imagem)</summary>
         <p className="text-xs text-(--sp-text-dim) mt-2 mb-3">Branco indica pixels usados na análise; preto indica pixels excluídos. Revise a máscara, pois a classificação é baseada apenas na cor.</p>
