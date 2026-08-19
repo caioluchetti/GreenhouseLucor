@@ -10,6 +10,15 @@ import threading
 import time
 import shutil
 import urllib.request
+import tempfile
+import zipfile
+import base64
+import io
+import re
+from pathlib import Path
+from starlette.background import BackgroundTask
+from PIL import Image, ImageDraw, ImageFont
+import numpy as np
 
 from models import (
     ZoneState, SensorReadings, StatusResponse,
@@ -33,8 +42,12 @@ from auth import get_current_user, verify_password, create_access_token, verify_
 MODE = os.environ.get("MQTT_MODE", "mock")
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "data", "captures")
 INTERVAL_UPLOAD_DIR = os.path.join(UPLOAD_DIR, "interval")
+GIF_UPLOAD_DIR = os.path.join(UPLOAD_DIR, "gifs")
+ILLUMINATION_CACHE_PATH = os.path.join(UPLOAD_DIR, "illumination_cache.json")
+ILLUMINATION_ANALYSIS_VERSION = 2
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(INTERVAL_UPLOAD_DIR, exist_ok=True)
+os.makedirs(GIF_UPLOAD_DIR, exist_ok=True)
 
 mqt = None
 mqtt = None
@@ -42,7 +55,6 @@ scheduler = None
 _history_running = True
 _camera_stream_running = True
 _camera_capture_running = True
-_drive_upload_running = True
 
 _latest_frame: bytes | None = None
 _last_frame_time: float = 0.0
@@ -165,75 +177,6 @@ def _camera_capture_loop():
         time.sleep(5)
 
 
-def _drive_upload_loop():
-    """Upload saved camera photos to the configured Google Drive folder."""
-    global _drive_upload_running
-    token_file = os.environ.get("GOOGLE_DRIVE_TOKEN", "/run/secrets/google-drive-token.json")
-    folder_id = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "1jRKgLSOn3UbpcbKn84WUrCrvQxpH3d3Y")
-    uploaded = set()
-    service = None
-
-    while _drive_upload_running:
-        try:
-            if service is None:
-                from google.auth.transport.requests import Request
-                from google.oauth2.credentials import Credentials
-                from googleapiclient.discovery import build
-
-                credentials = Credentials.from_authorized_user_file(
-                    token_file,
-                    ["https://www.googleapis.com/auth/drive"],
-                )
-                if credentials.expired and credentials.refresh_token:
-                    credentials.refresh(Request())
-                    with open(token_file, "w", encoding="utf-8") as token:
-                        token.write(credentials.to_json())
-                if not credentials.valid:
-                    raise RuntimeError("Google Drive OAuth token is invalid or expired")
-                service = build("drive", "v3", credentials=credentials, cache_discovery=False)
-
-            capture_sources = [
-                (UPLOAD_DIR, "camera_"),
-                (INTERVAL_UPLOAD_DIR, "interval_"),
-            ]
-            for source_dir, filename_prefix in capture_sources:
-                for filename in sorted(os.listdir(source_dir)):
-                    if not filename.startswith(filename_prefix) or not filename.endswith(".jpg"):
-                        continue
-                    if filename in uploaded:
-                        continue
-
-                    filepath = os.path.join(source_dir, filename)
-                    if not os.path.isfile(filepath):
-                        continue
-
-                    query = (
-                        f"name = '{filename}' and '{folder_id}' in parents "
-                        "and trashed = false"
-                    )
-                    existing = service.files().list(
-                        q=query,
-                        spaces="drive",
-                        fields="files(id)",
-                        pageSize=1,
-                    ).execute().get("files", [])
-                    if not existing:
-                        from googleapiclient.http import MediaFileUpload
-
-                        service.files().create(
-                            body={"name": filename, "parents": [folder_id]},
-                            media_body=MediaFileUpload(filepath, mimetype="image/jpeg"),
-                            fields="id",
-                        ).execute()
-                        print(f"[Google Drive] Uploaded {filename}", flush=True)
-                    uploaded.add(filename)
-        except Exception as exc:
-            service = None
-            print(f"[Google Drive] Upload error: {exc} — retrying in 5m", flush=True)
-
-        time.sleep(300)
-
-
 def _sensor_history_loop():
     while _history_running:
         time.sleep(300)
@@ -308,7 +251,7 @@ def _publish_schedule_sync():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global mqtt, scheduler, _history_running, _camera_stream_running, _camera_capture_running, _drive_upload_running
+    global mqtt, scheduler, _history_running, _camera_stream_running, _camera_capture_running
     ensure_default_password()
     print(f"[MQTT] Modo: {MODE}")
     if MODE == "real":
@@ -321,12 +264,10 @@ async def lifespan(app: FastAPI):
     threading.Thread(target=_sensor_history_loop, daemon=True).start()
     threading.Thread(target=_camera_stream_loop, daemon=True).start()
     threading.Thread(target=_camera_capture_loop, daemon=True).start()
-    threading.Thread(target=_drive_upload_loop, daemon=True).start()
     yield
     _history_running = False
     _camera_stream_running = False
     _camera_capture_running = False
-    _drive_upload_running = False
     mqtt.stop()
     scheduler.stop()
 
@@ -696,6 +637,464 @@ async def clear_sensor_history(db: Session = Depends(get_db), user: str = Depend
 # ────────────────────────────────────────────────
 # Camera
 # ────────────────────────────────────────────────
+
+PHOTO_FOLDERS = {
+    "daily": (UPLOAD_DIR, "Daily"),
+    "interval": (INTERVAL_UPLOAD_DIR, "Interval"),
+    "gifs": (GIF_UPLOAD_DIR, "GIFs"),
+}
+PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif"}
+
+
+def _photo_directory(folder: str) -> tuple[str, str]:
+    try:
+        return PHOTO_FOLDERS[folder]
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Pasta de fotos inválida")
+
+
+def _photo_path(folder: str, filename: str) -> Path:
+    directory, _ = _photo_directory(folder)
+    candidate = (Path(directory) / filename).resolve()
+    root = Path(directory).resolve()
+    if candidate.parent != root or candidate.suffix.lower() not in PHOTO_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Arquivo de foto inválido")
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="Foto não encontrada")
+    return candidate
+
+
+def _photo_timestamp(path: Path) -> str:
+    try:
+        timestamp = datetime.strptime(path.stem.rsplit("_", 2)[-2] + "_" + path.stem.rsplit("_", 2)[-1], "%Y%m%d_%H%M%S")
+        return timestamp.strftime("%d/%m/%Y %H:%M")
+    except (ValueError, IndexError):
+        return datetime.fromtimestamp(path.stat().st_mtime, ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
+
+
+INTERVAL_TIMESTAMP_RE = re.compile(r"interval_(\d{8})_(\d{6})\.(?:jpe?g|png)$", re.IGNORECASE)
+
+
+def _interval_photo_records():
+    records = []
+    for path in Path(INTERVAL_UPLOAD_DIR).iterdir():
+        match = INTERVAL_TIMESTAMP_RE.fullmatch(path.name)
+        if not path.is_file() or not match:
+            continue
+        timestamp = datetime.strptime(
+            f"{match.group(1)}_{match.group(2)}", "%Y%m%d_%H%M%S"
+        ).replace(tzinfo=ZoneInfo("America/Sao_Paulo"))
+        records.append({"path": path, "timestamp": timestamp})
+    return sorted(records, key=lambda item: item["timestamp"])
+
+
+def _heatmap_data_uri(values: np.ndarray, reference: np.ndarray, mask: np.ndarray | None = None) -> str:
+    """Create a compact colored heatmap overlay for browser display."""
+    height, width = reference.shape[:2]
+    preview_width = min(width, 1200)
+    preview_height = max(1, round(height * preview_width / width))
+    value_image = Image.fromarray(np.uint8(np.clip(values, 0, 1) * 255), mode="L")
+    value_image = value_image.resize((preview_width, preview_height), Image.Resampling.BILINEAR)
+    normalized = np.asarray(value_image, dtype=np.float32) / 255.0
+    # A readable yellow-red-blue scale without adding a plotting dependency.
+    color = np.stack([
+        np.clip(255 * normalized * 1.8, 0, 255),
+        np.clip(210 * (normalized ** 1.7), 0, 255),
+        np.clip(110 * (1 - normalized), 0, 255),
+    ], axis=-1).astype(np.uint8)
+    heatmap = Image.fromarray(color, mode="RGB").convert("RGBA")
+    base = Image.fromarray(reference, mode="RGB").resize(
+        (preview_width, preview_height), Image.Resampling.LANCZOS
+    ).convert("RGBA")
+    alpha = np.full(normalized.shape, 175, dtype=np.uint8)
+    if mask is not None:
+        mask_image = Image.fromarray((mask.astype(np.uint8) * 255), mode="L")
+        mask_image = mask_image.resize((preview_width, preview_height), Image.Resampling.BILINEAR)
+        alpha = (np.asarray(mask_image, dtype=np.uint8) / 255 * 175).astype(np.uint8)
+    heatmap.putalpha(Image.fromarray(alpha, mode="L"))
+    base.alpha_composite(heatmap)
+    buffer = io.BytesIO()
+    base.save(buffer, format="PNG", optimize=True)
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _vegetation_mask(reference: np.ndarray) -> np.ndarray:
+    """Heuristic mask for green plant tissue, excluding most soil and containers."""
+    channels = reference.astype(np.float32)
+    red, green, blue = channels[..., 0], channels[..., 1], channels[..., 2]
+    maximum = channels.max(axis=2)
+    minimum = channels.min(axis=2)
+    saturation = (maximum - minimum) / np.maximum(maximum, 1)
+    excess_green = 2 * green - red - blue
+    return (
+        (excess_green >= 18)
+        & (green >= red * 0.90)
+        & (green >= blue * 0.90)
+        & (saturation >= 0.12)
+        & (maximum >= 35)
+    )
+
+
+def _mask_data_uri(mask: np.ndarray) -> str:
+    image = Image.fromarray((mask.astype(np.uint8) * 255), mode="L")
+    image.thumbnail((1200, 1200), Image.Resampling.BILINEAR)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG", optimize=True)
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _stamp_gif_frame(frame: Image.Image, label: str) -> Image.Image:
+    stamped = frame.copy()
+    draw = ImageDraw.Draw(stamped)
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", max(14, min(24, stamped.width // 35)))
+    except OSError:
+        font = ImageFont.load_default()
+    left, top, right, bottom = draw.textbbox((0, 0), label, font=font)
+    padding = 6
+    x = stamped.width - (right - left) - padding * 2 - 10
+    y = stamped.height - (bottom - top) - padding * 2 - 10
+    draw.rounded_rectangle(
+        (x, y, stamped.width - 10, stamped.height - 10),
+        radius=5,
+        fill=(0, 0, 0, 175),
+    )
+    draw.text((x + padding, y + padding - top), label, font=font, fill=(255, 255, 255))
+    return stamped
+
+
+@app.get("/api/photos")
+async def list_photo_folders(user: str = Depends(get_current_user)):
+    return [
+        {"id": folder, "label": label}
+        for folder, (_, label) in PHOTO_FOLDERS.items()
+    ]
+
+
+@app.get("/api/photos/{folder}")
+async def list_photos(folder: str, user: str = Depends(get_current_user)):
+    directory, label = _photo_directory(folder)
+    photos = []
+    for path in Path(directory).iterdir():
+        if not path.is_file() or path.suffix.lower() not in PHOTO_EXTENSIONS:
+            continue
+        if folder == "daily" and not path.name.startswith("camera_"):
+            continue
+        if folder == "interval" and not path.name.startswith("interval_"):
+            continue
+        if folder == "gifs" and not path.name.startswith("timelapse_"):
+            continue
+        stat = path.stat()
+        photos.append({
+            "name": path.name,
+            "folder": folder,
+            "label": label,
+            "size": stat.st_size,
+            "modified_at": datetime.fromtimestamp(stat.st_mtime, ZoneInfo("America/Sao_Paulo")).isoformat(),
+            "url": f"/api/photos/{folder}/{path.name}",
+        })
+    photos.sort(key=lambda photo: photo["modified_at"], reverse=True)
+    return {"folder": folder, "label": label, "count": len(photos), "photos": photos}
+
+
+@app.get("/api/photos/{folder}/{filename}")
+async def get_photo(folder: str, filename: str, user: str = Depends(get_current_user)):
+    path = _photo_path(folder, filename)
+    media_type = "image/gif" if path.suffix.lower() == ".gif" else "image/jpeg"
+    return FileResponse(path, media_type=media_type)
+
+
+def _available_illumination_dates(records):
+    return sorted({item["timestamp"].date().isoformat() for item in records})
+
+
+def _read_illumination_cache():
+    try:
+        with open(ILLUMINATION_CACHE_PATH, encoding="utf-8") as cache_file:
+            return json.load(cache_file)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _write_illumination_cache(result):
+    temporary_path = f"{ILLUMINATION_CACHE_PATH}.tmp"
+    with open(temporary_path, "w", encoding="utf-8") as cache_file:
+        json.dump(result, cache_file)
+    os.replace(temporary_path, ILLUMINATION_CACHE_PATH)
+
+
+def _compute_illumination(mode, selected_date, day_records, available_dates):
+    """Analyze interval photos as relative brightness, not calibrated irradiance."""
+    frames = []
+    reference = None
+    try:
+        for item in day_records:
+            with Image.open(item["path"]) as source:
+                frame = np.asarray(source.convert("RGB"))
+            if reference is None:
+                reference = frame
+            elif frame.shape != reference.shape:
+                frame = np.asarray(Image.fromarray(frame).resize(
+                    (reference.shape[1], reference.shape[0]), Image.Resampling.BILINEAR
+                ))
+            luminance = (
+                frame[..., 0].astype(np.float32) * 0.2126
+                + frame[..., 1].astype(np.float32) * 0.7152
+                + frame[..., 2].astype(np.float32) * 0.0722
+            ) / 255.0
+            frames.append(luminance)
+
+        stack = np.stack(frames)
+        # Normalize each frame only for the spatial "typical day" view.
+        spatial_frames = []
+        for frame in stack:
+            low, high = np.percentile(frame, [2, 98])
+            spatial_frames.append(np.clip((frame - low) / (high - low), 0, 1) if high > low else frame)
+        typical = np.median(np.stack(spatial_frames), axis=0)
+        plant_mask = _vegetation_mask(reference)
+
+        timestamps = [item["timestamp"] for item in day_records]
+        intervals = [
+            max(0, (timestamps[pos + 1] - timestamps[pos]).total_seconds() / 3600)
+            for pos in range(len(timestamps) - 1)
+        ]
+        fallback_interval = float(np.median(intervals)) if intervals else 0.5
+        # Across multiple days, do not count overnight or missing-day gaps.
+        durations = ([0.5] * len(stack) if mode == "always" else
+                     intervals + [fallback_interval])
+        exposure = np.zeros_like(stack[0])
+        for frame, duration in zip(stack, durations):
+            exposure += frame * duration
+        typical_values = typical[plant_mask]
+        exposure_values = exposure[plant_mask]
+        exposure_scale = float(np.percentile(exposure_values, 98)) if exposure_values.size else 1
+        exposure_display = np.where(
+            plant_mask,
+            exposure / max(exposure_scale, 0.001),
+            0,
+        )
+
+        series = [
+            {
+                "timestamp": timestamp.isoformat(),
+                "label": timestamp.strftime("%H:%M"),
+                "value": round(float(frame[plant_mask].mean()) if plant_mask.any() else 0, 4),
+            }
+            for timestamp, frame in zip(timestamps, stack)
+        ]
+        photos = [
+            {
+                "name": item["path"].name,
+                "timestamp": item["timestamp"].isoformat(),
+                "label": item["timestamp"].strftime("%H:%M"),
+                "url": f"/api/photos/interval/{item['path'].name}",
+            }
+            for item in day_records
+        ]
+        return {
+            "dates": available_dates,
+            "date": selected_date,
+            "mode": mode,
+            "analysis_version": ILLUMINATION_ANALYSIS_VERSION,
+            "index": 0,
+            "photos": photos,
+            "typical_heatmap": _heatmap_data_uri(typical, reference, plant_mask),
+            "exposure_heatmap": _heatmap_data_uri(exposure_display, reference, plant_mask),
+            "vegetation_mask": _mask_data_uri(plant_mask),
+            "vegetation_coverage": round(float(plant_mask.mean()), 4),
+            "series": series,
+            "typical_average": round(float(typical_values.mean()) if typical_values.size else 0, 4),
+            "daily_exposure_average": round(float(exposure_values.mean()) if exposure_values.size else 0, 4),
+            "calibrated": False,
+        }
+    finally:
+        frames.clear()
+
+
+@app.get("/api/illumination")
+async def get_illumination(
+    date: str | None = None,
+    index: int = 0,
+    mode: str = "today",
+    user: str = Depends(get_current_user),
+):
+    """Return the last saved analysis without recalculating it."""
+    if mode not in ("today", "always"):
+        raise HTTPException(status_code=400, detail="Modo inválido (today|always)")
+    records = _interval_photo_records()
+    available_dates = _available_illumination_dates(records)
+    if not available_dates:
+        return {"dates": [], "photos": [], "cached": False, "message": "Nenhuma foto intervalada encontrada."}
+    selected_date = date if date in available_dates else available_dates[-1]
+    cache = _read_illumination_cache()
+    cache_date = selected_date if mode == "today" else None
+    if (not cache
+            or cache.get("analysis_version") != ILLUMINATION_ANALYSIS_VERSION
+            or cache.get("mode") != mode
+            or cache.get("date") != cache_date):
+        return {
+            "dates": available_dates,
+            "date": cache_date,
+            "mode": mode,
+            "photos": [],
+            "cached": False,
+            "message": "Nenhuma análise salva para este dia.",
+        }
+    cache["index"] = min(max(index, 0), len(cache.get("photos", [])) - 1)
+    cache["cached"] = True
+    return cache
+
+
+@app.post("/api/illumination/analyze")
+async def analyze_illumination(
+    date: str | None = None,
+    mode: str = "today",
+    user: str = Depends(get_current_user),
+):
+    """Compute and persist the latest illumination analysis on demand."""
+    if mode not in ("today", "always"):
+        raise HTTPException(status_code=400, detail="Modo inválido (today|always)")
+    records = _interval_photo_records()
+    available_dates = _available_illumination_dates(records)
+    if not available_dates:
+        raise HTTPException(status_code=404, detail="Nenhuma foto intervalada encontrada")
+    selected_date = date if date in available_dates else available_dates[-1]
+    selected_cache_date = selected_date if mode == "today" else None
+    day_records = (
+        [item for item in records if item["timestamp"].date().isoformat() == selected_date]
+        if mode == "today" else records
+    )
+    result = _compute_illumination(mode, selected_cache_date, day_records, available_dates)
+    _write_illumination_cache(result)
+    result["cached"] = True
+    return result
+
+
+@app.post("/api/photos/gif")
+async def create_photo_gif(payload: dict, user: str = Depends(get_current_user)):
+    photos = payload.get("photos")
+    if not isinstance(photos, list) or len(photos) < 2:
+        raise HTTPException(status_code=400, detail="Selecione pelo menos duas fotos")
+
+    paths = []
+    for item in photos:
+        if not isinstance(item, dict) or item.get("folder") not in ("daily", "interval"):
+            raise HTTPException(status_code=400, detail="Seleção de fotos inválida")
+        paths.append(_photo_path(item["folder"], item.get("name", "")))
+
+    paths.sort(key=lambda path: path.stat().st_mtime)
+    frames = []
+    try:
+        expected_size = None
+        for path in paths:
+            with Image.open(path) as source:
+                frame = source.convert("RGB")
+                if expected_size is None:
+                    expected_size = frame.size
+                elif frame.size != expected_size:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="As fotos selecionadas precisam ter a mesma resolução",
+                    )
+                frames.append(_stamp_gif_frame(frame, _photo_timestamp(path)))
+
+        timestamp = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y%m%d_%H%M%S")
+        filename = f"timelapse_{timestamp}.gif"
+        filepath = Path(GIF_UPLOAD_DIR) / filename
+        frames[0].save(
+            filepath,
+            save_all=True,
+            append_images=frames[1:],
+            duration=500,
+            loop=0,
+            optimize=False,
+        )
+    finally:
+        for frame in frames:
+            frame.close()
+
+    return {
+        "status": "created",
+        "filename": filename,
+        "folder": "gifs",
+        "frames": len(paths),
+        "width": expected_size[0],
+        "height": expected_size[1],
+        "url": f"/api/photos/gifs/{filename}",
+    }
+
+
+@app.post("/api/photos/delete")
+async def delete_photos(payload: dict, user: str = Depends(get_current_user)):
+    photos = payload.get("photos")
+    if not isinstance(photos, list) or not photos:
+        raise HTTPException(status_code=400, detail="Nenhuma foto selecionada")
+
+    paths = []
+    seen = set()
+    for item in photos:
+        if not isinstance(item, dict) or item.get("folder") not in PHOTO_FOLDERS:
+            raise HTTPException(status_code=400, detail="Seleção de fotos inválida")
+        key = (item["folder"], item.get("name", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        paths.append(_photo_path(key[0], key[1]))
+
+    for path in paths:
+        path.unlink()
+
+    return {"status": "deleted", "count": len(paths)}
+
+
+@app.post("/api/photos/download")
+async def download_photos(payload: dict, user: str = Depends(get_current_user)):
+    folder = payload.get("folder")
+    filenames = payload.get("filenames")
+    if folder is not None:
+        _photo_directory(folder)
+        folders = [folder]
+    else:
+        folders = list(PHOTO_FOLDERS)
+
+    if filenames is not None and (not isinstance(filenames, list) or not filenames):
+        raise HTTPException(status_code=400, detail="Nenhuma foto selecionada")
+
+    selected = []
+    for current_folder in folders:
+        directory, _ = _photo_directory(current_folder)
+        allowed_names = set(filenames) if filenames is not None else None
+        for path in Path(directory).iterdir():
+            if not path.is_file() or path.suffix.lower() not in PHOTO_EXTENSIONS:
+                continue
+            if current_folder == "daily" and not path.name.startswith("camera_"):
+                continue
+            if current_folder == "interval" and not path.name.startswith("interval_"):
+                continue
+            if current_folder == "gifs" and not path.name.startswith("timelapse_"):
+                continue
+            if allowed_names is not None and path.name not in allowed_names:
+                continue
+            selected.append((current_folder, path))
+
+    if not selected:
+        raise HTTPException(status_code=404, detail="Nenhuma foto encontrada")
+
+    temp = tempfile.NamedTemporaryFile(prefix="greenhouse-photos-", suffix=".zip", delete=False)
+    temp.close()
+    with zipfile.ZipFile(temp.name, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for current_folder, path in selected:
+            archive.write(path, arcname=f"{current_folder}/{path.name}")
+
+    filename = f"greenhouse-{folder or 'fotos-selecionadas'}.zip"
+    return FileResponse(
+        temp.name,
+        media_type="application/zip",
+        filename=filename,
+        background=BackgroundTask(os.unlink, temp.name),
+    )
 
 @app.get("/api/camera/schedule", response_model=CameraScheduleResponse)
 async def get_camera_schedule(db: Session = Depends(get_db)):

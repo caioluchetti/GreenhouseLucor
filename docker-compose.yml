@@ -8,14 +8,11 @@ services:
       - "${BACKEND_PORT:-6001}:6001"
     volumes:
       - greenhouse-data:/app/data
-      - "./google-drive-token.json:/run/secrets/google-drive-token.json:rw"
     environment:
       - MQTT_MODE=${MQTT_MODE:-mock}
       - MQTT_BROKER=${MQTT_BROKER:-localhost}
       - MQTT_PORT=${MQTT_PORT:-1884}
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://greenhouse.cortada-server.ddns.net}
-      - GOOGLE_DRIVE_TOKEN=/run/secrets/google-drive-token.json
-      - GOOGLE_DRIVE_FOLDER_ID=${GOOGLE_DRIVE_FOLDER_ID:-1jRKgLSOn3UbpcbKn84WUrCrvQxpH3d3Y}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6001/api/time').read()"]
       interval: 30s

@@ -5,6 +5,7 @@ import ClimatePanel from './components/ClimatePanel.jsx'
 import SensorCharts from './components/SensorCharts.jsx'
 import StatusBar from './components/StatusBar.jsx'
 import FirmwarePanel from './components/FirmwarePanel.jsx'
+import PhotosPanel from './components/PhotosPanel.jsx'
 import Login from './components/Login.jsx'
 
 const API = import.meta.env.BASE_URL + 'api'
@@ -351,6 +352,7 @@ export default function App() {
     { key: 'schedules', label: 'Agendamentos', icon: '⏰' },
     { key: 'climate', label: 'Clima', icon: '🌡️' },
     { key: 'charts', label: 'Histórico', icon: '📊' },
+    { key: 'photos', label: 'Fotos', icon: '📷' },
     { key: 'firmware', label: 'Firmware', icon: '🔧' },
   ]
 
@@ -442,6 +444,8 @@ export default function App() {
                 isGuest={guest}
                 api={API}
               />
+            ) : tab === 'photos' ? (
+              <PhotosPanel api={API} authHeaders={authHeaders} />
             ) : tab === 'firmware' ? (
               <FirmwarePanel api={API} authHeaders={authHeaders} />
             ) : (
