@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo
 import os
 import json
 import threading
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 import time
 import shutil
 import urllib.request
@@ -43,6 +45,7 @@ MODE = os.environ.get("MQTT_MODE", "mock")
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "data", "captures")
 INTERVAL_UPLOAD_DIR = os.path.join(UPLOAD_DIR, "interval")
 GIF_UPLOAD_DIR = os.path.join(UPLOAD_DIR, "gifs")
+GIF_JOBS_PATH = os.path.join(UPLOAD_DIR, "gif-jobs.json")
 ILLUMINATION_CACHE_PATH = os.path.join(UPLOAD_DIR, "illumination_cache.json")
 ILLUMINATION_ANALYSIS_VERSION = 2
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -58,6 +61,20 @@ _camera_capture_running = True
 
 _latest_frame: bytes | None = None
 _last_frame_time: float = 0.0
+_gif_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gif-generator")
+try:
+    with open(GIF_JOBS_PATH, encoding="utf-8") as jobs_file:
+        _gif_jobs = json.load(jobs_file)
+except (OSError, json.JSONDecodeError):
+    _gif_jobs = {}
+_gif_jobs_lock = threading.Lock()
+
+
+def _save_gif_jobs():
+    temporary_path = f"{GIF_JOBS_PATH}.tmp"
+    with open(temporary_path, "w", encoding="utf-8") as jobs_file:
+        json.dump(_gif_jobs, jobs_file)
+    os.replace(temporary_path, GIF_JOBS_PATH)
 
 
 def _camera_stream_loop():
@@ -138,10 +155,8 @@ def _camera_capture_loop():
             if frame and frame_age <= 120:
                 timestamp = now.strftime("%Y%m%d_%H%M%S")
                 filename = f"camera_{timestamp}.jpg"
-                filepath = os.path.join(UPLOAD_DIR, filename)
                 try:
-                    with open(filepath, "wb") as image_file:
-                        image_file.write(frame)
+                    _write_capture_atomically(UPLOAD_DIR, filename, frame)
                     captured_slots.add(slot)
                     print(f"[Camera Capture] Saved {filename}", flush=True)
                 except OSError as exc:
@@ -158,10 +173,8 @@ def _camera_capture_loop():
             if frame and frame_age <= 120:
                 timestamp = now.strftime("%Y%m%d_%H%M%S")
                 filename = f"interval_{timestamp}.jpg"
-                filepath = os.path.join(INTERVAL_UPLOAD_DIR, filename)
                 try:
-                    with open(filepath, "wb") as image_file:
-                        image_file.write(frame)
+                    _write_capture_atomically(INTERVAL_UPLOAD_DIR, filename, frame)
                     interval_captured_slots.add(interval_slot)
                     print(f"[Camera Interval] Saved {filename}", flush=True)
                 except OSError as exc:
@@ -175,6 +188,23 @@ def _camera_capture_loop():
         if len(interval_captured_slots) > 60:
             interval_captured_slots = {item for item in interval_captured_slots if item >= f"{now:%Y-%m-%d} 00:00"}
         time.sleep(5)
+
+
+def _write_capture_atomically(directory: str, filename: str, content: bytes):
+    """Make completed camera frames visible in one filesystem operation."""
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=directory, prefix=f".{filename}.", suffix=".tmp", delete=False
+        ) as image_file:
+            temporary_path = image_file.name
+            image_file.write(content)
+            image_file.flush()
+            os.fsync(image_file.fileno())
+        os.replace(temporary_path, os.path.join(directory, filename))
+    finally:
+        if temporary_path and os.path.exists(temporary_path):
+            os.unlink(temporary_path)
 
 
 def _sensor_history_loop():
@@ -977,6 +1007,11 @@ async def create_photo_gif(payload: dict, user: str = Depends(get_current_user))
     photos = payload.get("photos")
     if not isinstance(photos, list) or len(photos) < 2:
         raise HTTPException(status_code=400, detail="Selecione pelo menos duas fotos")
+    duration_seconds = payload.get("duration_seconds", 5)
+    if isinstance(duration_seconds, bool) or not isinstance(duration_seconds, (int, float)):
+        raise HTTPException(status_code=400, detail="A duração do GIF é inválida")
+    if not 1 <= duration_seconds <= 60:
+        raise HTTPException(status_code=400, detail="A duração do GIF deve estar entre 1 e 60 segundos")
 
     paths = []
     for item in photos:
@@ -985,8 +1020,26 @@ async def create_photo_gif(payload: dict, user: str = Depends(get_current_user))
         paths.append(_photo_path(item["folder"], item.get("name", "")))
 
     paths.sort(key=lambda path: path.stat().st_mtime)
+    job_id = uuid.uuid4().hex
+    with _gif_jobs_lock:
+        _gif_jobs[job_id] = {
+            "status": "queued",
+            "photos": [{"folder": item["folder"], "name": item["name"]} for item in photos],
+            "duration_seconds": duration_seconds,
+        }
+        _save_gif_jobs()
+    _gif_executor.submit(_generate_gif, job_id, paths, duration_seconds)
+    return {"status": "queued", "job_id": job_id}
+
+
+def _generate_gif(job_id, paths, duration_seconds):
     frames = []
+    temporary_path = None
     try:
+        with _gif_jobs_lock:
+            _gif_jobs[job_id]["status"] = "processing"
+            _save_gif_jobs()
+
         expected_size = None
         for path in paths:
             with Image.open(path) as source:
@@ -994,36 +1047,74 @@ async def create_photo_gif(payload: dict, user: str = Depends(get_current_user))
                 if expected_size is None:
                     expected_size = frame.size
                 elif frame.size != expected_size:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="As fotos selecionadas precisam ter a mesma resolução",
-                    )
+                    raise ValueError("As fotos selecionadas precisam ter a mesma resolução")
                 frames.append(_stamp_gif_frame(frame, _photo_timestamp(path)))
 
         timestamp = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y%m%d_%H%M%S")
         filename = f"timelapse_{timestamp}.gif"
         filepath = Path(GIF_UPLOAD_DIR) / filename
+        temporary_path = filepath.with_name(f".{filename}.tmp")
         frames[0].save(
-            filepath,
+            temporary_path,
+            format="GIF",
             save_all=True,
             append_images=frames[1:],
-            duration=500,
+            duration=max(20, round(duration_seconds * 1000 / len(paths))),
             loop=0,
             optimize=False,
         )
+        os.replace(temporary_path, filepath)
+        temporary_path = None
+        with _gif_jobs_lock:
+            _gif_jobs[job_id] = {
+                "status": "completed",
+                "result": {
+                    "status": "created",
+                    "filename": filename,
+                    "folder": "gifs",
+                    "frames": len(paths),
+                    "width": expected_size[0],
+                    "height": expected_size[1],
+                    "url": f"/api/photos/gifs/{filename}",
+                },
+            }
+            _save_gif_jobs()
+    except Exception as exc:
+        with _gif_jobs_lock:
+            _gif_jobs[job_id] = {"status": "failed", "error": str(exc)}
+            _save_gif_jobs()
     finally:
         for frame in frames:
             frame.close()
+        if temporary_path:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
 
-    return {
-        "status": "created",
-        "filename": filename,
-        "folder": "gifs",
-        "frames": len(paths),
-        "width": expected_size[0],
-        "height": expected_size[1],
-        "url": f"/api/photos/gifs/{filename}",
-    }
+
+@app.get("/api/gif-jobs/{job_id}")
+async def get_gif_job(job_id: str, user: str = Depends(get_current_user)):
+    with _gif_jobs_lock:
+        job = _gif_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Trabalho de GIF não encontrado")
+    return {"job_id": job_id, **job}
+
+
+def _resume_gif_jobs():
+    for job_id, job in list(_gif_jobs.items()):
+        if job.get("status") not in ("queued", "processing"):
+            continue
+        try:
+            paths = [_photo_path(item["folder"], item["name"]) for item in job["photos"]]
+        except (KeyError, HTTPException) as exc:
+            _gif_jobs[job_id] = {"status": "failed", "error": str(exc)}
+            continue
+        _gif_executor.submit(_generate_gif, job_id, paths, job["duration_seconds"])
+
+
+_resume_gif_jobs()
 
 
 @app.post("/api/photos/delete")

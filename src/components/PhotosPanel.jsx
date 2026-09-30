@@ -26,6 +26,7 @@ export default function PhotosPanel({ api, authHeaders }) {
   const [deleting, setDeleting] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
   const [activeView, setActiveView] = useState('gallery')
+  const [gifDurationSeconds, setGifDurationSeconds] = useState(5)
   const touchStartX = useRef(null)
 
   useEffect(() => {
@@ -73,6 +74,10 @@ export default function PhotosPanel({ api, authHeaders }) {
   }, [activeFolder, api, authHeaders, refreshKey])
 
   const activeLabel = folders.find(folder => folder.id === activeFolder)?.label || activeFolder
+  const gifPhotoCount = [...selected].filter(key => key.startsWith('daily/') || key.startsWith('interval/')).length
+  const gifFrameDurationMs = gifPhotoCount
+    ? Math.max(20, Math.round((gifDurationSeconds * 1000) / gifPhotoCount))
+    : 0
   const selectedInFolder = useMemo(
     () => photos.filter(photo => selected.has(`${activeFolder}/${photo.name}`)),
     [activeFolder, photos, selected]
@@ -152,10 +157,36 @@ export default function PhotosPanel({ api, authHeaders }) {
       const response = await fetch(`${api}/photos/gif`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ photos: selectedPhotos }),
+        body: JSON.stringify({ photos: selectedPhotos, duration_seconds: gifDurationSeconds }),
       })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.detail || 'Erro ao gerar GIF')
+      const responseText = await response.text()
+      let data = {}
+      try {
+        data = responseText ? JSON.parse(responseText) : {}
+      } catch {
+        data = {}
+      }
+      if (!response.ok) throw new Error(data.detail || 'Erro interno ao gerar GIF')
+      let job = data
+      while (job.status === 'queued' || job.status === 'processing') {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        const statusResponse = await fetch(`${api}/gif-jobs/${job.job_id}`, { headers: authHeaders() })
+        const statusText = await statusResponse.text()
+        let statusData = {}
+        try {
+          statusData = statusText ? JSON.parse(statusText) : {}
+        } catch {
+          statusData = {}
+        }
+        if (!statusResponse.ok) {
+          throw new Error(statusResponse.status === 404
+            ? 'O trabalho do GIF expirou após uma reinicialização. Gere o GIF novamente.'
+            : (statusData.detail || 'Erro ao consultar GIF'))
+        }
+        job = statusData
+      }
+      if (job.status === 'failed') throw new Error(job.error || 'Erro interno ao gerar GIF')
+      if (job.status !== 'completed') throw new Error('Estado de GIF desconhecido')
       setSelected(new Set())
       setActiveFolder('gifs')
     } catch (err) {
@@ -272,8 +303,25 @@ export default function PhotosPanel({ api, authHeaders }) {
           <button onClick={deleteSelected} disabled={downloading || deleting || !selected.size} className="px-3 py-2 rounded-lg text-xs border border-(--sp-danger)/30 text-(--sp-danger) hover:bg-red-500/10 disabled:opacity-40">
             {deleting ? 'Excluindo...' : 'Excluir selecionadas'}
           </button>
-        </div>
+       </div>
       </div>
+
+      {gifPhotoCount >= 2 && (
+        <div className="sp-glass-sm px-3 py-2 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 text-xs text-(--sp-text-dim)">
+          <label htmlFor="gif-duration" className="whitespace-nowrap">Duração do GIF: <strong className="text-(--sp-warning)">{gifDurationSeconds}s</strong></label>
+          <input
+            id="gif-duration"
+            type="range"
+            min="1"
+            max="60"
+            step="1"
+            value={gifDurationSeconds}
+            onChange={event => setGifDurationSeconds(Number(event.target.value))}
+            className="w-full sm:max-w-xs accent-(--sp-warning)"
+          />
+          <span className="whitespace-nowrap">{gifFrameDurationMs} ms por frame ({gifPhotoCount} fotos)</span>
+        </div>
+      )}
 
       {error && <div className="rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-(--sp-danger)">{error}</div>}
 
